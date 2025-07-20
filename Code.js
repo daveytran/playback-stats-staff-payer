@@ -1726,7 +1726,7 @@ function createInvoicesAndMarkUI() {
  * @param {number} daysBack - Number of days back to include invoices (default: 30)
  * @returns {Object} Success status and PDF file URL
  */
-function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
+function exportInvoicesPDF(invoiceNumber = null, daysBack = 30, specificDate = null) {
   try {
     const mainSheet = SpreadsheetApp.getActiveSpreadsheet();
     const invoicingSheet = mainSheet.getSheetByName('Invoicing');
@@ -1747,12 +1747,22 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     
     // Get all data including headers
     const allData = invoicingSheet.getRange(headerRow, 1, lastRow - headerRow + 1, invoicingSheet.getLastColumn()).getValues();
-    const headers = allData[0];
-    const dataRows = allData.slice(1);
+    const allHeaders = allData[0];
+    const allDataRows = allData.slice(1);
     
-    // Find column indices
-    const invoiceNumberCol = headers.indexOf('Invoice Number');
-    const dateCol = headers.indexOf('Date');
+    // Define columns to export
+    const exportColumns = ['Contractor', 'Work done', 'Total', 'Email', 'ACCOUNT NAME', 'ACC NUMBER', 'BANK', 'Playback Links'];
+    
+    // Find column indices for filtering and export columns
+    const invoiceNumberCol = allHeaders.indexOf('Invoice Number');
+    const dateCol = allHeaders.indexOf('Date');
+    
+    const exportColIndices = exportColumns.map(col => allHeaders.indexOf(col));
+    const missingColumns = exportColumns.filter((col, idx) => exportColIndices[idx] === -1);
+    
+    if (missingColumns.length > 0) {
+      throw new Error(`Missing columns: ${missingColumns.join(', ')}`);
+    }
     
     if (invoiceNumberCol === -1) {
       throw new Error('Invoice Number column not found');
@@ -1763,16 +1773,34 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysBack);
     
+    // Filter rows based on criteria
+    let filteredAllDataRows = [];
     if (invoiceNumber) {
-      // Export specific invoice number
-      filteredRows = dataRows.filter(row => row[invoiceNumberCol] === invoiceNumber);
+      if (specificDate) {
+        // Export specific invoice by number AND date (unique combination - used for latest invoice)
+        const targetDate = new Date(specificDate);
+        filteredAllDataRows = allDataRows.filter(row => {
+          const rowDate = new Date(row[dateCol]);
+          return row[invoiceNumberCol] === invoiceNumber && 
+                 rowDate.toDateString() === targetDate.toDateString();
+        });
+      } else {
+        // Export all rows with this invoice number (regardless of date)
+        filteredAllDataRows = allDataRows.filter(row => row[invoiceNumberCol] === invoiceNumber);
+      }
     } else {
-      // Export recent invoices
-      filteredRows = dataRows.filter(row => {
+      // Export recent invoices (when no specific invoice number provided)
+      filteredAllDataRows = allDataRows.filter(row => {
         const rowDate = new Date(row[dateCol]);
         return rowDate >= cutoffDate;
       });
     }
+    
+    // Extract only the specified columns from filtered data
+    const headers = exportColumns;
+    const filteredRows = filteredAllDataRows.map(row => 
+      exportColIndices.map(colIndex => row[colIndex])
+    );
     
     if (filteredRows.length === 0) {
       return {
@@ -1908,18 +1936,23 @@ function exportLatestInvoicePDF() {
       };
     }
     
-    // Get the most recent invoice number
+    // Get the most recent invoice by InvoiceNumber + Date combination
     const headers = invoicingSheet.getRange(headerRow, 1, 1, invoicingSheet.getLastColumn()).getValues()[0];
     const invoiceNumberCol = headers.indexOf('Invoice Number');
+    const dateCol = headers.indexOf('Date');
     
     if (invoiceNumberCol === -1) {
       throw new Error('Invoice Number column not found');
     }
+    if (dateCol === -1) {
+      throw new Error('Date column not found');
+    }
     
     const latestInvoiceNumber = invoicingSheet.getRange(lastRow, invoiceNumberCol + 1).getValue();
+    const latestInvoiceDate = invoicingSheet.getRange(lastRow, dateCol + 1).getValue();
     
-    // Export that specific invoice
-    return exportInvoicesPDF(latestInvoiceNumber);
+    // Export that specific invoice by number and date
+    return exportInvoicesPDF(latestInvoiceNumber, null, latestInvoiceDate);
     
   } catch (error) {
     Logger.log('Error in exportLatestInvoicePDF: ' + error.toString());
