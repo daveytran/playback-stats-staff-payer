@@ -729,7 +729,7 @@ function handleCalculatePayRequest() {
     const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
     
     // Auto-create invoices (since this is from web, assume user wants to proceed)
-    createInvoice(payments);
+    const invoiceResult = createInvoice(payments);
     markWorkAsInvoiced(workLogData);
     
     return ContentService
@@ -745,6 +745,11 @@ function handleCalculatePayRequest() {
             unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
             tasksWithNoRate: errors.tasksWithNoRate
           }
+        },
+        invoiceInfo: {
+          invoiceNumber: invoiceResult.invoiceNumber,
+          invoiceDate: invoiceResult.invoiceDate.toISOString(),
+          rowsCreated: invoiceResult.rowsCreated
         }
       }))
       .setMimeType(ContentService.MimeType.JSON);
