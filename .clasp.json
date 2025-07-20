@@ -12,5 +12,12 @@
     ".json"
   ],
   "filePushOrder": [],
-  "skipSubdirectories": false
+  "skipSubdirectories": false,
+  "deployments": [
+    {
+      "description": "Staff Pay Calculator Web App",
+      "access": "ANYONE",
+      "executeAs": "USER_DEPLOYING"
+    }
+  ]
 }

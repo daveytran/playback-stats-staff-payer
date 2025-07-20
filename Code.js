@@ -52,6 +52,7 @@ function onOpen() {
  * - ?action=calculatePay: Executes payment calculation and creates invoices
  * - ?action=getStatus: Returns current status (unpaid tasks count)
  * - ?action=getDebugLog: Returns debug information
+ * - ?action=getDeploymentUrl: Returns the current deployment URL for frontend use
  * 
  * Direct API Usage:
  * - calculateStaffPay() - Returns payment calculation results
@@ -59,6 +60,10 @@ function onOpen() {
  * - getUnpaidWorkFromMaster() - Gets unpaid work data
  * - getPayConfiguration() - Gets pay rates configuration
  * - getStaffMapping() - Gets staff name mappings
+ * 
+ * Deployment Management:
+ * - setCurrentDeploymentUrl(url) - Store deployment URL after deploying
+ * - updateDeploymentAfterPush(deploymentId) - Helper to update URL with deployment ID
  */
 function doGet(e) {
   const action = e.parameter.action;
@@ -83,10 +88,13 @@ function doGet(e) {
       case 'getDebugLog':
         result = handleDebugLogRequest();
         break;
+      case 'getDeploymentUrl':
+        result = handleGetDeploymentUrl();
+        break;
       default:
         result = ContentService
           .createTextOutput(JSON.stringify({
-            error: 'Invalid action. Use: preview, calculatePay, getStatus, or getDebugLog'
+            error: 'Invalid action. Use: preview, calculatePay, getStatus, getDebugLog, or getDeploymentUrl'
           }))
           .setMimeType(ContentService.MimeType.JSON);
     }
@@ -517,7 +525,7 @@ function handleCalculatePayRequest() {
     const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
     
     // Auto-create invoices (since this is from web, assume user wants to proceed)
-    createInvoices(payments);
+    createInvoice(payments);
     markWorkAsInvoiced(workLogData);
     
     return ContentService
@@ -582,6 +590,54 @@ function handleDebugLogRequest() {
       debugLog: debugLog
     }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Handle get deployment URL request
+function handleGetDeploymentUrl() {
+  const deploymentUrl = PropertiesService.getScriptProperties().getProperty('CURRENT_DEPLOYMENT_URL');
+  
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      success: true,
+      url: deploymentUrl || null,
+      message: deploymentUrl ? 'Deployment URL found' : 'No deployment URL set. Run setCurrentDeploymentUrl() after deploying.',
+      timestamp: new Date().toISOString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Deployment Management Functions
+ * Use these to manage deployment URLs dynamically
+ */
+
+// Set the current deployment URL (call this after deploying)
+function setCurrentDeploymentUrl(url) {
+  if (!url) {
+    throw new Error('URL is required');
+  }
+  
+  PropertiesService.getScriptProperties().setProperty('CURRENT_DEPLOYMENT_URL', url);
+  
+  console.log(`Deployment URL updated to: ${url}`);
+  return {
+    success: true,
+    url: url,
+    timestamp: new Date().toISOString()
+  };
+}
+
+// Get the current deployment URL (for internal use)
+function getCurrentDeploymentUrl() {
+  return PropertiesService.getScriptProperties().getProperty('CURRENT_DEPLOYMENT_URL');
+}
+
+// Utility function to help with deployment
+function updateDeploymentAfterPush(deploymentId) {
+  const baseUrl = 'https://script.google.com/macros/s/';
+  const fullUrl = `${baseUrl}${deploymentId}/exec`;
+  
+  return setCurrentDeploymentUrl(fullUrl);
 }
 
 /**
@@ -991,8 +1047,8 @@ function formatCurrency(amount) {
   }).format(amount);
 }
 
-// Create invoices in Invoicing sheet
-function createInvoices(payments) {
+// Create invoice in Invoicing sheet
+function createInvoice(payments) {
   const mainSheet = SpreadsheetApp.getActiveSpreadsheet();
   let invoicingSheet = mainSheet.getSheetByName('Invoicing');
   
@@ -1031,9 +1087,11 @@ function createInvoices(payments) {
   const invoiceData = [];
   const timestamp = new Date();
   
-  // Generate invoice number based on date and sequence
+  // Generate single invoice number for all rows in this invocation
   const dateStr = Utilities.formatDate(timestamp, Session.getScriptTimeZone(), 'yyyyMMdd');
-  let invoiceSequence = 1;
+  const invoiceNumber = `INV-${dateStr}-${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
+  
+  debugLog.push(`Creating invoice ${invoiceNumber} for ${Object.keys(payments).length} staff members`);
   
   Object.values(payments).forEach(payment => {
     // Group tasks by type
@@ -1059,12 +1117,13 @@ function createInvoices(payments) {
       return header + '\n' + links;
     }).join('\n\n');
     
-    // Create row with proper number of columns (13 based on your sheet structure)
-    const row = new Array(13).fill('');
+    // Create row with proper number of columns
+    const maxColumnIndex = Math.max(...Object.values(invoiceColumns).filter(i => i !== -1));
+    const row = new Array(maxColumnIndex + 1).fill('');
     
     // Only populate the columns that exist
     if (invoiceColumns['Invoice Number'] !== -1) {
-      row[invoiceColumns['Invoice Number']] = `INV-${dateStr}-${String(invoiceSequence).padStart(3, '0')}`;
+      row[invoiceColumns['Invoice Number']] = invoiceNumber;
     }
     if (invoiceColumns['Date'] !== -1) {
       row[invoiceColumns['Date']] = timestamp;
@@ -1083,81 +1142,75 @@ function createInvoices(payments) {
     }
     
     invoiceData.push(row);
-    invoiceSequence++;
   });
   
-  // Check if we need more rows and add them if necessary
+  // Check if we need more rows and add exactly the right amount
   const rowsNeeded = nextRow + invoiceData.length - 1;
   const currentMaxRows = invoicingSheet.getMaxRows();
   
   if (rowsNeeded > currentMaxRows) {
-    const additionalRows = rowsNeeded - currentMaxRows + 10; // Add 10 extra for buffer
+    const additionalRows = rowsNeeded - currentMaxRows; // Add exactly what we need
     invoicingSheet.insertRowsAfter(currentMaxRows, additionalRows);
-    debugLog.push(`Added ${additionalRows} rows to Invoicing sheet`);
+    debugLog.push(`Added ${additionalRows} rows to Invoicing sheet (exactly ${invoiceData.length} invoice rows needed)`);
   }
   
-  // Write to sheet
+  // Write invoice data to sheet
   if (invoiceData.length > 0) {
-    const maxCols = Math.min(13, invoicingSheet.getMaxColumns());
-    const targetRowCount = Math.min(invoiceData.length, invoicingSheet.getMaxRows() - nextRow + 1);
+    const maxCols = invoicingSheet.getMaxColumns();
     
     // First, copy formulas from the row above (if it exists and has data)
     if (nextRow > headerRow + 1 && nextRow <= invoicingSheet.getMaxRows()) {
       try {
         const sourceRow = nextRow - 1;
+        const sourceRange = invoicingSheet.getRange(sourceRow, 1, 1, maxCols);
+        const targetRange = invoicingSheet.getRange(nextRow, 1, invoiceData.length, maxCols);
         
-        if (targetRowCount > 0) {
-          const sourceRange = invoicingSheet.getRange(sourceRow, 1, 1, maxCols);
-          const targetRange = invoicingSheet.getRange(nextRow, 1, targetRowCount, maxCols);
-          
-          // Copy formulas only (not values)
-          sourceRange.copyTo(targetRange, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
-          debugLog.push(`Copied formulas from row ${sourceRow} to rows ${nextRow}-${nextRow + targetRowCount - 1}`);
-        }
+        // Copy formulas only (not values)
+        sourceRange.copyTo(targetRange, SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+        debugLog.push(`Copied formulas from row ${sourceRow} to rows ${nextRow}-${nextRow + invoiceData.length - 1}`);
       } catch (error) {
         Logger.log('Formula copy failed: ' + error.toString());
         debugLog.push(`Formula copy failed: ${error.toString()}`);
       }
     }
     
-    // Then write our data only to specific columns (not all columns)
-    if (targetRowCount > 0) {
-      // Write each column individually to preserve formulas in other columns
-      Object.entries(invoiceColumns).forEach(([columnName, columnIndex]) => {
-        if (columnIndex !== -1 && columnIndex < maxCols) {
-          const columnData = invoiceData.slice(0, targetRowCount).map(row => [row[columnIndex]]);
-          if (columnData.length > 0) {
-            const columnRange = invoicingSheet.getRange(nextRow, columnIndex + 1, targetRowCount, 1);
-            columnRange.setValues(columnData);
-          }
+    // Then write our data only to specific columns (preserving formulas in other columns)
+    Object.entries(invoiceColumns).forEach(([columnName, columnIndex]) => {
+      if (columnIndex !== -1 && columnIndex < maxCols) {
+        const columnData = invoiceData.map(row => [row[columnIndex]]);
+        if (columnData.length > 0) {
+          const columnRange = invoicingSheet.getRange(nextRow, columnIndex + 1, columnData.length, 1);
+          columnRange.setValues(columnData);
         }
-      });
-    }
+      }
+    });
+    
+    debugLog.push(`Wrote ${invoiceData.length} invoice rows starting at row ${nextRow}`);
     
     // Set text wrapping for the Work done column
-    if (invoiceColumns['Work done'] !== -1 && targetRowCount > 0) {
+    if (invoiceColumns['Work done'] !== -1) {
       const workDoneRange = invoicingSheet.getRange(
         nextRow, 
         invoiceColumns['Work done'] + 1, 
-        targetRowCount, 
+        invoiceData.length, 
         1
       );
       workDoneRange.setWrap(true);
     }
     
     // Set text wrapping for the Playback Links column if it exists
-    if (invoiceColumns['Playback Links'] !== -1 && targetRowCount > 0) {
+    if (invoiceColumns['Playback Links'] !== -1) {
       const playbackLinksRange = invoicingSheet.getRange(
         nextRow, 
         invoiceColumns['Playback Links'] + 1, 
-        targetRowCount, 
+        invoiceData.length, 
         1
       );
       playbackLinksRange.setWrap(true);
     }
     
     // Adjust row heights to accommodate wrapped text
-    for (let i = 0; i < targetRowCount; i++) {
+    for (let i = 0; i < invoiceData.length; i++) {
       if (nextRow + i <= invoicingSheet.getMaxRows()) {
         invoicingSheet.setRowHeight(nextRow + i, 120);
       }
@@ -1342,7 +1395,7 @@ function createInvoicesAndMark(workLogData, payments) {
       };
     }
     
-    createInvoices(payments);
+    createInvoice(payments);
     markWorkAsInvoiced(workLogData);
     
     return {
