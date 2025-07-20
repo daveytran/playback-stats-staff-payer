@@ -1783,9 +1783,9 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
       };
     }
     
-    // Create a temporary sheet with filtered data
-    const tempSheetName = `TempInvoices_${Date.now()}`;
-    const tempSheet = mainSheet.insertSheet(tempSheetName);
+    // Create a temporary spreadsheet with just the filtered data
+    const tempSpreadsheet = SpreadsheetApp.create(`TempInvoices_${Date.now()}`);
+    const tempSheet = tempSpreadsheet.getActiveSheet();
     
     // Copy headers
     tempSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -1798,20 +1798,8 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     // Format the temporary sheet
     formatInvoiceSheet(tempSheet, headers.length, filteredRows.length + 1);
     
-    // Convert to PDF - only the temporary sheet
-    const spreadsheet = tempSheet.getParent();
-    const tempSheetId = tempSheet.getSheetId();
-    
-    // Create PDF URL for just this sheet
-    const url = `https://docs.google.com/spreadsheets/d/${spreadsheet.getId()}/export?format=pdf&gid=${tempSheetId}&size=A4&portrait=true&fitw=true&scale=4&gridlines=false`;
-    
-    const response = UrlFetchApp.fetch(url, {
-      headers: {
-        'Authorization': 'Bearer ' + ScriptApp.getOAuthToken()
-      }
-    });
-    
-    const pdfBlob = response.getBlob().setName(`temp_invoice_${Date.now()}.pdf`);
+    // Convert to PDF using built-in method
+    const pdfBlob = tempSpreadsheet.getAs('application/pdf');
     
     // Create filename
     const dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd');
@@ -1823,8 +1811,8 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     const base64Data = Utilities.base64Encode(pdfBlob.getBytes());
     const dataUrl = `data:application/pdf;base64,${base64Data}`;
     
-    // Clean up temporary sheet
-    mainSheet.deleteSheet(tempSheet);
+    // Clean up temporary spreadsheet
+    DriveApp.getFileById(tempSpreadsheet.getId()).setTrashed(true);
     
     return {
       success: true,
