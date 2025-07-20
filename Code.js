@@ -37,54 +37,648 @@ function getColumnIndices(sheet, columnNames, headerRow = 1) {
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('Staff Pay Automation')
-    .addItem('Calculate Staff Pay', 'calculateStaffPay')
+    .addItem('Calculate Staff Pay', 'calculateStaffPayUI')
     .addItem('Analyze Sheet Structure', 'analyzeSheets')
     .addItem('Get Sample Data', 'getSampleData')
     .addToUi();
 }
 
-// Main function to calculate staff pay
-function calculateStaffPay() {
-  const ui = SpreadsheetApp.getUi();
+/**
+ * Web App Interface - serves both HTML UI and API endpoints
+ * 
+ * Usage as Web App:
+ * - No parameters: Returns HTML interface for manual use
+ * - ?action=preview: Returns payment preview as JSON
+ * - ?action=calculatePay: Executes payment calculation and creates invoices
+ * - ?action=getStatus: Returns current status (unpaid tasks count)
+ * - ?action=getDebugLog: Returns debug information
+ * 
+ * Direct API Usage:
+ * - calculateStaffPay() - Returns payment calculation results
+ * - createInvoicesAndMark(workLogData, payments) - Creates invoices and marks work as paid
+ * - getUnpaidWorkFromMaster() - Gets unpaid work data
+ * - getPayConfiguration() - Gets pay rates configuration
+ * - getStaffMapping() - Gets staff name mappings
+ */
+function doGet(e) {
+  const action = e.parameter.action;
+  
+  // If no action parameter, serve the web interface
+  if (!action) {
+    return createWebAppInterface();
+  }
   
   try {
-    // Get work log data
+    let result;
+    switch(action) {
+      case 'preview':
+        result = handleCalculatePayPreviewRequest();
+        break;
+      case 'calculatePay':
+        result = handleCalculatePayRequest();
+        break;
+      case 'getStatus':
+        result = handleStatusRequest();
+        break;
+      case 'getDebugLog':
+        result = handleDebugLogRequest();
+        break;
+      default:
+        result = ContentService
+          .createTextOutput(JSON.stringify({
+            error: 'Invalid action. Use: preview, calculatePay, getStatus, or getDebugLog'
+          }))
+          .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    return addCorsHeaders(result);
+  } catch (error) {
+    const errorResult = ContentService
+      .createTextOutput(JSON.stringify({
+        error: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+    
+    return addCorsHeaders(errorResult);
+  }
+}
+
+// Add CORS headers to allow cross-origin requests
+function addCorsHeaders(response) {
+  return response
+    .setHeaders({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type'
+    });
+}
+
+/**
+ * Creates the web app HTML interface
+ * Provides a user-friendly interface for external consumers
+ */
+function createWebAppInterface() {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Staff Pay Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f7fa;
+    }
+    .container {
+      background: white;
+      border-radius: 8px;
+      padding: 30px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #2c3e50;
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .action-card {
+      border: 1px solid #e1e8ed;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .action-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    .btn {
+      background: #3498db;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background-color 0.3s;
+      margin: 5px;
+    }
+    .btn:hover {
+      background: #2980b9;
+    }
+    .btn-success {
+      background: #27ae60;
+    }
+    .btn-success:hover {
+      background: #229954;
+    }
+    .btn-warning {
+      background: #f39c12;
+    }
+    .btn-warning:hover {
+      background: #e67e22;
+    }
+    .btn-info {
+      background: #8e44ad;
+    }
+    .btn-info:hover {
+      background: #7d3c98;
+    }
+    .results {
+      margin-top: 20px;
+      padding: 20px;
+      border-radius: 5px;
+      display: none;
+    }
+    .results.success {
+      background: #d4edda;
+      border: 1px solid #c3e6cb;
+      color: #155724;
+    }
+    .results.error {
+      background: #f8d7da;
+      border: 1px solid #f5c6cb;
+      color: #721c24;
+    }
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 20px;
+    }
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3498db;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 10px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    pre {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 5px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    .api-docs {
+      margin-top: 40px;
+      padding: 20px;
+      background: #f8f9fa;
+      border-radius: 8px;
+    }
+    .api-docs h3 {
+      color: #2c3e50;
+      margin-top: 0;
+    }
+    .endpoint {
+      background: white;
+      padding: 10px;
+      margin: 10px 0;
+      border-left: 4px solid #3498db;
+      border-radius: 4px;
+    }
+    code {
+      background: #e9ecef;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Staff Pay Calculator</h1>
+    
+    <div class="action-grid">
+      <div class="action-card">
+        <h3>Preview Payments</h3>
+        <p>Review payment calculations without creating invoices</p>
+        <button class="btn" onclick="previewPayments()">Preview</button>
+      </div>
+      
+      <div class="action-card">
+        <h3>Calculate & Create Invoices</h3>
+        <p>Calculate payments and create invoices in the spreadsheet</p>
+        <button class="btn btn-success" onclick="calculatePayments()">Execute</button>
+      </div>
+      
+      <div class="action-card">
+        <h3>Check Status</h3>
+        <p>View current status and unpaid task count</p>
+        <button class="btn btn-warning" onclick="checkStatus()">Status</button>
+      </div>
+      
+      <div class="action-card">
+        <h3>Debug Information</h3>
+        <p>View debug logs for troubleshooting</p>
+        <button class="btn btn-info" onclick="getDebugLog()">Debug</button>
+      </div>
+    </div>
+    
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <div>Processing request...</div>
+    </div>
+    
+    <div class="results" id="results"></div>
+    
+    <div class="api-docs">
+      <h3>API Documentation</h3>
+      <p>This web app provides both a user interface and programmatic API access:</p>
+      
+      <div class="endpoint">
+        <strong>GET ?action=preview</strong><br>
+        Returns payment preview without creating invoices
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET ?action=calculatePay</strong><br>
+        Calculates payments and creates invoices
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET ?action=getStatus</strong><br>
+        Returns current status (unpaid task count)
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET ?action=getDebugLog</strong><br>
+        Returns debug information
+      </div>
+      
+      <h4>Direct Function Calls (Google Apps Script)</h4>
+      <p>You can also call these functions directly:</p>
+      <ul>
+        <li><code>calculateStaffPay()</code> - Returns payment calculation results</li>
+        <li><code>createInvoicesAndMark(workLogData, payments)</code> - Creates invoices</li>
+        <li><code>getUnpaidWorkFromMaster()</code> - Gets unpaid work data</li>
+        <li><code>getPayConfiguration()</code> - Gets pay rates</li>
+        <li><code>getStaffMapping()</code> - Gets staff mappings</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    function showLoading() {
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('results').style.display = 'none';
+    }
+    
+    function hideLoading() {
+      document.getElementById('loading').style.display = 'none';
+    }
+    
+    function showResults(content, isError = false) {
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = content;
+      resultsDiv.className = 'results ' + (isError ? 'error' : 'success');
+      resultsDiv.style.display = 'block';
+      hideLoading();
+    }
+    
+    function makeRequest(action) {
+      showLoading();
+      
+      fetch(window.location.href + '?action=' + action)
+        .then(response => response.json())
+        .then(data => {
+          if (data.error) {
+            showResults('<strong>Error:</strong> ' + data.error, true);
+          } else {
+            showResults('<pre>' + JSON.stringify(data, null, 2) + '</pre>');
+          }
+        })
+        .catch(error => {
+          showResults('<strong>Request failed:</strong> ' + error.message, true);
+        });
+    }
+    
+    function previewPayments() {
+      makeRequest('preview');
+    }
+    
+    function calculatePayments() {
+      if (confirm('This will create invoices and mark work as paid. Continue?')) {
+        makeRequest('calculatePay');
+      }
+    }
+    
+    function checkStatus() {
+      makeRequest('getStatus');
+    }
+    
+    function getDebugLog() {
+      makeRequest('getDebugLog');
+    }
+  </script>
+</body>
+</html>
+  `;
+  
+  return HtmlService.createHtmlOutput(html)
+    .setTitle('Staff Pay Calculator')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function doPost(e) {
+  // Handle POST requests for specific function calls
+  const data = JSON.parse(e.postData.contents);
+  const functionName = data.function;
+  const preview = data.preview;
+  
+  try {
+    let result;
+    switch(functionName) {
+      case 'calculateStaffPay':
+        if (preview) {
+          // For preview, return calculation data without executing
+          result = handleCalculatePayPreviewRequest();
+        } else {
+          // For non-preview, just return calculation data (don't create invoices)
+          const calcResult = calculateStaffPay();
+          result = addCorsHeaders(ContentService
+            .createTextOutput(JSON.stringify(calcResult))
+            .setMimeType(ContentService.MimeType.JSON));
+        }
+        break;
+      case 'createInvoicesAndMark':
+        // For this function, we need to get the calculation first, then create invoices
+        const payResult = calculateStaffPay();
+        if (!payResult.success) {
+          result = addCorsHeaders(ContentService
+            .createTextOutput(JSON.stringify(payResult))
+            .setMimeType(ContentService.MimeType.JSON));
+        } else {
+          const invoiceResult = createInvoicesAndMark(payResult.workLogData, payResult.payments);
+          result = addCorsHeaders(ContentService
+            .createTextOutput(JSON.stringify({
+              ...invoiceResult,
+              summary: payResult.summary
+            }))
+            .setMimeType(ContentService.MimeType.JSON));
+        }
+        break;
+      default:
+        result = ContentService
+          .createTextOutput(JSON.stringify({
+            error: `Invalid function name: ${functionName}. Use 'calculateStaffPay' or 'createInvoicesAndMark'`
+          }))
+          .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Add CORS headers
+    return result.getHeaders ? addCorsHeaders(result) : result;
+  } catch (error) {
+    const errorResult = ContentService
+      .createTextOutput(JSON.stringify({
+        error: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+    
+    return addCorsHeaders(errorResult);
+  }
+}
+
+// Handle calculate pay preview request from web (no execution)
+function handleCalculatePayPreviewRequest() {
+  try {
     const workLogData = getUnpaidWorkFromMaster();
     
     if (workLogData.length === 0) {
-      // Get debug log
-      const debugLog = JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]');
-      const debugInfo = debugLog.join('\n');
+      return addCorsHeaders(ContentService
+        .createTextOutput(JSON.stringify({
+          success: false,
+          message: 'No unpaid work found',
+          debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
+        }))
+        .setMimeType(ContentService.MimeType.JSON));
+    }
+    
+    const payConfig = getPayConfiguration();
+    const staffMapping = getStaffMapping();
+    const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
+    
+    // Return preview data without executing
+    return addCorsHeaders(ContentService
+      .createTextOutput(JSON.stringify({
+        success: true,
+        message: 'Payment preview calculated successfully',
+        summary: {
+          totalTasks: workLogData.length,
+          totalStaff: Object.keys(payments).length,
+          grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
+          errors: {
+            unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
+            unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
+            tasksWithNoRate: errors.tasksWithNoRate
+          }
+        },
+        payments: payments // Include full payment details for review
+      }))
+      .setMimeType(ContentService.MimeType.JSON));
       
-      const result = ui.alert(
-        'No unpaid work found',
-        'All tasks are either already paid or invoiced.\n\nClick "Yes" to see debug log, "No" to exit.',
-        ui.ButtonSet.YES_NO
-      );
+  } catch (error) {
+    return addCorsHeaders(ContentService
+      .createTextOutput(JSON.stringify({
+        success: false,
+        error: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON));
+  }
+}
+
+// Handle calculate pay request from web
+function handleCalculatePayRequest() {
+  try {
+    const workLogData = getUnpaidWorkFromMaster();
+    
+    if (workLogData.length === 0) {
+      return addCorsHeaders(ContentService
+        .createTextOutput(JSON.stringify({
+          success: false,
+          message: 'No unpaid work found',
+          debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
+        }))
+        .setMimeType(ContentService.MimeType.JSON));
+    }
+    
+    const payConfig = getPayConfiguration();
+    const staffMapping = getStaffMapping();
+    const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
+    
+    // Auto-create invoices (since this is from web, assume user wants to proceed)
+    createInvoices(payments);
+    markWorkAsInvoiced(workLogData);
+    
+    return addCorsHeaders(ContentService
+      .createTextOutput(JSON.stringify({
+        success: true,
+        message: 'Invoices created successfully',
+        summary: {
+          totalTasks: workLogData.length,
+          totalStaff: Object.keys(payments).length,
+          grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
+          errors: {
+            unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
+            unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
+            tasksWithNoRate: errors.tasksWithNoRate
+          }
+        }
+      }))
+      .setMimeType(ContentService.MimeType.JSON));
       
-      if (result === ui.Button.YES) {
-        showDebugLog();
+  } catch (error) {
+    return addCorsHeaders(ContentService
+      .createTextOutput(JSON.stringify({
+        success: false,
+        error: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON));
+  }
+}
+
+// Handle status request
+function handleStatusRequest() {
+  try {
+    const workLogData = getUnpaidWorkFromMaster();
+    
+    return addCorsHeaders(ContentService
+      .createTextOutput(JSON.stringify({
+        success: true,
+        status: {
+          unpaidTasks: workLogData.length,
+          lastCheck: new Date().toISOString()
+        }
+      }))
+      .setMimeType(ContentService.MimeType.JSON));
+      
+  } catch (error) {
+    return addCorsHeaders(ContentService
+      .createTextOutput(JSON.stringify({
+        success: false,
+        error: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON));
+  }
+}
+
+// Handle debug log request
+function handleDebugLogRequest() {
+  const debugLog = JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]');
+  
+  return addCorsHeaders(ContentService
+    .createTextOutput(JSON.stringify({
+      success: true,
+      debugLog: debugLog
+    }))
+    .setMimeType(ContentService.MimeType.JSON));
+}
+
+/**
+ * Core API function to calculate staff pay
+ * Returns payment calculation results without UI interaction
+ * 
+ * @return {Object} {
+ *   success: boolean,
+ *   workLogData: Array,
+ *   payments: Object,
+ *   errors: Object,
+ *   summary: Object
+ * }
+ */
+function calculateStaffPay() {
+  try {
+    const workLogData = getUnpaidWorkFromMaster();
+    
+    if (workLogData.length === 0) {
+      return {
+        success: false,
+        message: 'No unpaid work found',
+        debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
+      };
+    }
+    
+    const payConfig = getPayConfiguration();
+    const staffMapping = getStaffMapping();
+    const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
+    
+    return {
+      success: true,
+      workLogData: workLogData,
+      payments: payments,
+      errors: {
+        unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
+        unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
+        tasksWithNoRate: errors.tasksWithNoRate
+      },
+      summary: {
+        totalTasks: workLogData.length,
+        totalStaff: Object.keys(payments).length,
+        grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0)
+      }
+    };
+    
+  } catch (error) {
+    Logger.log(error);
+    return {
+      success: false,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Google Sheets UI version of calculateStaffPay
+ * Shows interactive dialog for confirmation and actions
+ */
+function calculateStaffPayUI() {
+  const ui = SpreadsheetApp.getUi();
+  
+  try {
+    const result = calculateStaffPay();
+    
+    if (!result.success) {
+      if (result.message === 'No unpaid work found') {
+        const response = ui.alert(
+          'No unpaid work found',
+          'All tasks are either already paid or invoiced.\n\nClick "Yes" to see debug log, "No" to exit.',
+          ui.ButtonSet.YES_NO
+        );
+        
+        if (response === ui.Button.YES) {
+          showDebugLog();
+        }
+      } else {
+        ui.alert('Error', result.error || 'An unknown error occurred', ui.ButtonSet.OK);
       }
       return;
     }
     
-    // Get pay configuration
-    const payConfig = getPayConfiguration();
-    const staffMapping = getStaffMapping();
+    const { payments, errors } = result;
     
-    // Calculate payments
-    const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
-    
-    // Check for errors
+    // Build error message
     let errorMessage = '';
-    if (errors.unmatchedTaskTypes.size > 0) {
+    if (errors.unmatchedTaskTypes.length > 0) {
       errorMessage += `\n⚠️ Unmatched Task Types in Pay Config:\n`;
       errors.unmatchedTaskTypes.forEach(type => {
         errorMessage += `  - ${type}\n`;
       });
     }
     
-    if (errors.unmatchedStaffKeys.size > 0) {
+    if (errors.unmatchedStaffKeys.length > 0) {
       errorMessage += `\n⚠️ Staff Keys not found in mapping:\n`;
       errors.unmatchedStaffKeys.forEach(key => {
         errorMessage += `  - ${key}\n`;
@@ -98,11 +692,8 @@ function calculateStaffPay() {
       });
     }
     
-    // Show summary for confirmation
     const summary = createPaymentSummary(payments);
-    const fullMessage = summary + (errorMessage ? '\n\n' + errorMessage : '');
     
-    // Show dialog with three options
     const htmlContent = `
       <div style="font-family: Arial, sans-serif;">
         <h3>Payment Summary</h3>
@@ -110,7 +701,7 @@ function calculateStaffPay() {
         ${errorMessage ? `<div style="color: red; margin-top: 10px;"><pre>${errorMessage}</pre></div>` : ''}
         <div style="margin-top: 20px;">
           <p>Choose an action:</p>
-          <button onclick="google.script.run.createInvoicesAndMark()" style="padding: 10px 20px; margin-right: 10px;">Create Invoices</button>
+          <button onclick="google.script.run.createInvoicesAndMarkUI()" style="padding: 10px 20px; margin-right: 10px;">Create Invoices</button>
           <button onclick="google.script.run.showDebugLog()" style="padding: 10px 20px; margin-right: 10px;">Show Debug Log</button>
           <button onclick="google.script.host.close()" style="padding: 10px 20px;">Cancel</button>
         </div>
@@ -123,9 +714,9 @@ function calculateStaffPay() {
     
     ui.showModalDialog(htmlOutput, 'Payment Summary & Actions');
     
-    // Store work data for later use
-    PropertiesService.getScriptProperties().setProperty('pendingWorkData', JSON.stringify(workLogData));
-    PropertiesService.getScriptProperties().setProperty('pendingPayments', JSON.stringify(payments));
+    // Store for UI callback
+    PropertiesService.getScriptProperties().setProperty('pendingWorkData', JSON.stringify(result.workLogData));
+    PropertiesService.getScriptProperties().setProperty('pendingPayments', JSON.stringify(result.payments));
     
   } catch (error) {
     ui.alert('Error', 'An error occurred: ' + error.toString(), ui.ButtonSet.OK);
@@ -731,27 +1322,65 @@ ${debugInfo}
   SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Debug Log');
 }
 
-// Function to create invoices and mark work (called from HTML dialog)
-function createInvoicesAndMark() {
+/**
+ * Core API function to create invoices and mark work as invoiced
+ * 
+ * @param {Array} workLogData - Array of work items to mark as invoiced
+ * @param {Object} payments - Payment data organized by staff member
+ * @return {Object} { success: boolean, message?: string, error?: string }
+ */
+function createInvoicesAndMark(workLogData, payments) {
+  try {
+    if (!workLogData || workLogData.length === 0) {
+      return {
+        success: false,
+        error: 'No work data provided'
+      };
+    }
+    
+    if (!payments || Object.keys(payments).length === 0) {
+      return {
+        success: false,
+        error: 'No payment data provided'
+      };
+    }
+    
+    createInvoices(payments);
+    markWorkAsInvoiced(workLogData);
+    
+    return {
+      success: true,
+      message: 'Invoices created and work marked as invoiced'
+    };
+    
+  } catch (error) {
+    Logger.log(error);
+    return {
+      success: false,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Google Sheets UI version - uses stored properties from calculateStaffPayUI
+ */
+function createInvoicesAndMarkUI() {
   try {
     const workLogData = JSON.parse(PropertiesService.getScriptProperties().getProperty('pendingWorkData') || '[]');
     const payments = JSON.parse(PropertiesService.getScriptProperties().getProperty('pendingPayments') || '{}');
     
-    if (workLogData.length === 0 || Object.keys(payments).length === 0) {
-      throw new Error('No pending work data found. Please run Calculate Staff Pay again.');
-    }
+    const result = createInvoicesAndMark(workLogData, payments);
     
-    // Create invoices
-    createInvoices(payments);
-    
-    // Mark work as invoiced
-    markWorkAsInvoiced(workLogData);
-    
-    // Clean up
+    // Clean up stored properties
     PropertiesService.getScriptProperties().deleteProperty('pendingWorkData');
     PropertiesService.getScriptProperties().deleteProperty('pendingPayments');
     
-    SpreadsheetApp.getUi().alert('Success', 'Invoices created and work marked as invoiced.', SpreadsheetApp.getUi().ButtonSet.OK);
+    if (result.success) {
+      SpreadsheetApp.getUi().alert('Success', result.message, SpreadsheetApp.getUi().ButtonSet.OK);
+    } else {
+      SpreadsheetApp.getUi().alert('Error', result.error, SpreadsheetApp.getUi().ButtonSet.OK);
+    }
     
   } catch (error) {
     SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
