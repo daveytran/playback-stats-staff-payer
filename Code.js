@@ -91,7 +91,7 @@ function doGet(e) {
           .setMimeType(ContentService.MimeType.JSON);
     }
     
-    return addCorsHeaders(result);
+    return result;
   } catch (error) {
     const errorResult = ContentService
       .createTextOutput(JSON.stringify({
@@ -99,18 +99,15 @@ function doGet(e) {
       }))
       .setMimeType(ContentService.MimeType.JSON);
     
-    return addCorsHeaders(errorResult);
+    return errorResult;
   }
 }
 
 // Add CORS headers to allow cross-origin requests
 function addCorsHeaders(response) {
-  return response
-    .setHeaders({
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type'
-    });
+  // ContentService responses don't support setHeaders, so we return the response as-is
+  // CORS is handled at the web app deployment level in Google Apps Script
+  return response;
 }
 
 /**
@@ -409,26 +406,26 @@ function doPost(e) {
         } else {
           // For non-preview, just return calculation data (don't create invoices)
           const calcResult = calculateStaffPay();
-          result = addCorsHeaders(ContentService
+          result = ContentService
             .createTextOutput(JSON.stringify(calcResult))
-            .setMimeType(ContentService.MimeType.JSON));
+            .setMimeType(ContentService.MimeType.JSON);
         }
         break;
       case 'createInvoicesAndMark':
         // For this function, we need to get the calculation first, then create invoices
         const payResult = calculateStaffPay();
         if (!payResult.success) {
-          result = addCorsHeaders(ContentService
+          result = ContentService
             .createTextOutput(JSON.stringify(payResult))
-            .setMimeType(ContentService.MimeType.JSON));
+            .setMimeType(ContentService.MimeType.JSON);
         } else {
           const invoiceResult = createInvoicesAndMark(payResult.workLogData, payResult.payments);
-          result = addCorsHeaders(ContentService
+          result = ContentService
             .createTextOutput(JSON.stringify({
               ...invoiceResult,
               summary: payResult.summary
             }))
-            .setMimeType(ContentService.MimeType.JSON));
+            .setMimeType(ContentService.MimeType.JSON);
         }
         break;
       default:
@@ -458,13 +455,13 @@ function handleCalculatePayPreviewRequest() {
     const workLogData = getUnpaidWorkFromMaster();
     
     if (workLogData.length === 0) {
-      return addCorsHeaders(ContentService
+      return ContentService
         .createTextOutput(JSON.stringify({
           success: false,
           message: 'No unpaid work found',
           debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
         }))
-        .setMimeType(ContentService.MimeType.JSON));
+        .setMimeType(ContentService.MimeType.JSON);
     }
     
     const payConfig = getPayConfiguration();
@@ -472,7 +469,7 @@ function handleCalculatePayPreviewRequest() {
     const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
     
     // Return preview data without executing
-    return addCorsHeaders(ContentService
+    return ContentService
       .createTextOutput(JSON.stringify({
         success: true,
         message: 'Payment preview calculated successfully',
@@ -488,15 +485,15 @@ function handleCalculatePayPreviewRequest() {
         },
         payments: payments // Include full payment details for review
       }))
-      .setMimeType(ContentService.MimeType.JSON));
+      .setMimeType(ContentService.MimeType.JSON);
       
   } catch (error) {
-    return addCorsHeaders(ContentService
+    return ContentService
       .createTextOutput(JSON.stringify({
         success: false,
         error: error.toString()
       }))
-      .setMimeType(ContentService.MimeType.JSON));
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -506,13 +503,13 @@ function handleCalculatePayRequest() {
     const workLogData = getUnpaidWorkFromMaster();
     
     if (workLogData.length === 0) {
-      return addCorsHeaders(ContentService
+      return ContentService
         .createTextOutput(JSON.stringify({
           success: false,
           message: 'No unpaid work found',
           debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
         }))
-        .setMimeType(ContentService.MimeType.JSON));
+        .setMimeType(ContentService.MimeType.JSON);
     }
     
     const payConfig = getPayConfiguration();
@@ -523,7 +520,7 @@ function handleCalculatePayRequest() {
     createInvoices(payments);
     markWorkAsInvoiced(workLogData);
     
-    return addCorsHeaders(ContentService
+    return ContentService
       .createTextOutput(JSON.stringify({
         success: true,
         message: 'Invoices created successfully',
@@ -538,15 +535,15 @@ function handleCalculatePayRequest() {
           }
         }
       }))
-      .setMimeType(ContentService.MimeType.JSON));
+      .setMimeType(ContentService.MimeType.JSON);
       
   } catch (error) {
-    return addCorsHeaders(ContentService
+    return ContentService
       .createTextOutput(JSON.stringify({
         success: false,
         error: error.toString()
       }))
-      .setMimeType(ContentService.MimeType.JSON));
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -555,7 +552,7 @@ function handleStatusRequest() {
   try {
     const workLogData = getUnpaidWorkFromMaster();
     
-    return addCorsHeaders(ContentService
+    return ContentService
       .createTextOutput(JSON.stringify({
         success: true,
         status: {
@@ -563,15 +560,15 @@ function handleStatusRequest() {
           lastCheck: new Date().toISOString()
         }
       }))
-      .setMimeType(ContentService.MimeType.JSON));
+      .setMimeType(ContentService.MimeType.JSON);
       
   } catch (error) {
-    return addCorsHeaders(ContentService
+    return ContentService
       .createTextOutput(JSON.stringify({
         success: false,
         error: error.toString()
       }))
-      .setMimeType(ContentService.MimeType.JSON));
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -579,12 +576,12 @@ function handleStatusRequest() {
 function handleDebugLogRequest() {
   const debugLog = JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]');
   
-  return addCorsHeaders(ContentService
+  return ContentService
     .createTextOutput(JSON.stringify({
       success: true,
       debugLog: debugLog
     }))
-    .setMimeType(ContentService.MimeType.JSON));
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
