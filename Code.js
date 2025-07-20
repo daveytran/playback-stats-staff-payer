@@ -1485,6 +1485,12 @@ function createInvoice(payments) {
     existingLog.push(...debugLog);
     PropertiesService.getScriptProperties().setProperty('lastDebugLog', JSON.stringify(existingLog));
   }
+  
+  return {
+    invoiceNumber: invoiceNumber,     // The generated invoice number
+    invoiceDate: timestamp,           // When invoice was created
+    rowsCreated: invoiceData.length   // Number of staff rows
+  };
 }
 
 // Mark work as invoiced in MASTER sheet
@@ -1771,8 +1777,17 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30, specificDate = n
     
     // Extract only the specified columns from filtered data
     const headers = exportColumns;
+    const accNumberIndex = exportColumns.indexOf('ACC NUMBER');
+    
     const filteredRows = filteredAllDataRows.map(row => 
-      exportColIndices.map(colIndex => row[colIndex])
+      exportColIndices.map((colIndex, exportIndex) => {
+        const value = row[colIndex];
+        // Force ACC NUMBER to be treated as text to preserve leading zeros
+        if (exportIndex === accNumberIndex && value !== null && value !== undefined) {
+          return "'" + String(value); // Prefix with single quote to force text format
+        }
+        return value;
+      })
     );
     
     if (filteredRows.length === 0) {
