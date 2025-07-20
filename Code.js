@@ -1798,8 +1798,20 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     // Format the temporary sheet
     formatInvoiceSheet(tempSheet, headers.length, filteredRows.length + 1);
     
-    // Convert to PDF
-    const pdfBlob = tempSheet.getParent().getAs('application/pdf');
+    // Convert to PDF - only the temporary sheet
+    const spreadsheet = tempSheet.getParent();
+    const tempSheetId = tempSheet.getSheetId();
+    
+    // Create PDF URL for just this sheet
+    const url = `https://docs.google.com/spreadsheets/d/${spreadsheet.getId()}/export?format=pdf&gid=${tempSheetId}&size=A4&portrait=true&fitw=true&scale=4&gridlines=false`;
+    
+    const response = UrlFetchApp.fetch(url, {
+      headers: {
+        'Authorization': 'Bearer ' + ScriptApp.getOAuthToken()
+      }
+    });
+    
+    const pdfBlob = response.getBlob().setName(`temp_invoice_${Date.now()}.pdf`);
     
     // Create filename
     const dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd');
