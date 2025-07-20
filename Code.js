@@ -1804,6 +1804,9 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     // Format the temporary sheet
     formatInvoiceSheet(tempSheet, headers.length, filteredRows.length + 1);
     
+    // Wait a moment for formatting to apply
+    Utilities.sleep(1000);
+    
     // Convert to PDF using built-in method
     const pdfBlob = tempSpreadsheet.getAs('application/pdf');
     
@@ -1817,8 +1820,12 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     const base64Data = Utilities.base64Encode(pdfBlob.getBytes());
     const dataUrl = `data:application/pdf;base64,${base64Data}`;
     
-    // Clean up temporary spreadsheet
-    DriveApp.getFileById(tempSpreadsheet.getId()).setTrashed(true);
+    // Clean up temporary spreadsheet after PDF is created
+    try {
+      DriveApp.getFileById(tempSpreadsheet.getId()).setTrashed(true);
+    } catch (cleanupError) {
+      Logger.log('Warning: Could not clean up temp spreadsheet: ' + cleanupError.toString());
+    }
     
     return {
       success: true,
