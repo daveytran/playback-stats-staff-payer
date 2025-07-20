@@ -73,9 +73,11 @@ clasp deployments
 
 ### API Endpoints
 - **Preview**: `?action=preview` - Returns payment calculation without creating invoices
-- **Execute**: `?action=calculatePay` - Calculates payments and creates invoices  
+- **Execute**: `?action=calculatePay` - Calculates payments, creates invoices, and returns invoice metadata
 - **Status**: `?action=getStatus` - Returns unpaid task count
 - **Debug**: `?action=getDebugLog` - Returns debug information
+- **Export Latest PDF**: `?action=exportLatestInvoice` - Exports most recent invoice as PDF
+- **Export Specific PDF**: `?action=exportInvoicePDF&invoiceNumber=XXX` - Exports specific invoice by number
 
 ## Core Functions
 
@@ -103,6 +105,15 @@ clasp deployments
 - **Invoicing**: Where invoice rows are created
 
 ## Recent Updates
+
+### Invoice Metadata Response Enhancement (Latest)
+- Updated `handleCalculatePayRequest()` to return invoice metadata in response
+- Added `invoiceInfo` field containing:
+  - `invoiceNumber`: Generated invoice identifier (e.g., "INV-20250720-234")
+  - `invoiceDate`: ISO timestamp when invoice was created
+  - `rowsCreated`: Number of staff invoice rows created
+- Enables PlayBack Game Review frontend to show success dialogs and targeted PDF export
+- Maintains backward compatibility with existing integrations
 
 ### Invoice Creation Fix
 - Function renamed from `createInvoices` to `createInvoice` (singular)
