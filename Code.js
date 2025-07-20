@@ -1820,6 +1820,33 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30, specificDate = n
     // Format the temporary sheet
     formatInvoiceSheet(tempSheet, headers.length, filteredRows.length + 1);
     
+    // Auto-resize all columns to fit content
+    for (let i = 1; i <= headers.length; i++) {
+      tempSheet.autoResizeColumn(i);
+    }
+    
+    // Set minimum column widths for readability
+    const minWidths = {
+      'Contractor': 150,
+      'Work done': 200,
+      'Total': 80,
+      'Email': 200,
+      'ACCOUNT NAME': 150,
+      'ACC NUMBER': 120,
+      'BANK': 100,
+      'Playback Links': 300
+    };
+    
+    headers.forEach((header, index) => {
+      const colIndex = index + 1;
+      const currentWidth = tempSheet.getColumnWidth(colIndex);
+      const minWidth = minWidths[header] || 100;
+      
+      if (currentWidth < minWidth) {
+        tempSheet.setColumnWidth(colIndex, minWidth);
+      }
+    });
+    
     // Wait a moment for formatting to apply
     Utilities.sleep(1000);
     
