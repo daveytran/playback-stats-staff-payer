@@ -38,6 +38,14 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('Staff Pay Automation')
     .addItem('Calculate Staff Pay', 'calculateStaffPayUI')
+    .addSeparator()
+    .addItem('Create Invoices & Export PDF', 'createInvoicesAndMarkUI')
+    .addSeparator()
+    .addSubMenu(ui.createMenu('Export PDF')
+      .addItem('Export Latest Invoice', 'exportLatestInvoiceUI')
+      .addItem('Export Invoice by Number...', 'exportInvoiceByNumberUI')
+      .addItem('Export Recent Invoices...', 'exportRecentInvoicesUI'))
+    .addSeparator()
     .addItem('Analyze Sheet Structure', 'analyzeSheets')
     .addItem('Get Sample Data', 'getSampleData')
     .addToUi();
@@ -88,9 +96,6 @@ function doGet(e) {
       case 'getDebugLog':
         result = handleDebugLogRequest();
         break;
-      case 'getDeploymentUrl':
-        result = handleGetDeploymentUrl();
-        break;
       case 'test':
         result = ContentService
           .createTextOutput(JSON.stringify({
@@ -115,7 +120,7 @@ function doGet(e) {
       default:
         result = ContentService
           .createTextOutput(JSON.stringify({
-            error: 'Invalid action. Available actions: preview, calculatePay, getStatus, getDebugLog, getDeploymentUrl, exportLatestInvoice, exportInvoicePDF'
+            error: 'Invalid action. Available actions: preview, calculatePay, getStatus, getDebugLog, test, exportLatestInvoice, exportInvoicePDF'
           }))
           .setMimeType(ContentService.MimeType.JSON);
     }
@@ -312,8 +317,8 @@ function createWebAppInterface() {
       </div>
       
       <div class="action-card">
-        <h3>Calculate & Create Invoices</h3>
-        <p>Calculate payments and create invoices in the spreadsheet</p>
+        <h3>Calculate, Create Invoices & Export PDF</h3>
+        <p>Calculate payments, create invoices in the spreadsheet, and export PDF</p>
         <button class="btn btn-success" onclick="calculatePayments()">Execute</button>
       </div>
       
@@ -335,11 +340,6 @@ function createWebAppInterface() {
         <button class="btn" onclick="testConnection()">Test</button>
       </div>
       
-      <div class="action-card">
-        <h3>Deployment URL</h3>
-        <p>Get current deployment URL for API access</p>
-        <button class="btn btn-info" onclick="getDeploymentUrl()">Get URL</button>
-      </div>
       
       <div class="action-card">
         <h3>Export Latest Invoice</h3>
@@ -380,7 +380,7 @@ function createWebAppInterface() {
       
       <div class="endpoint">
         <strong>GET ?action=calculatePay</strong><br>
-        Calculates payments and creates invoices
+        Calculates payments, creates invoices, and exports PDF
       </div>
       
       <div class="endpoint">
@@ -393,9 +393,10 @@ function createWebAppInterface() {
         Returns debug information
       </div>
       
+      
       <div class="endpoint">
-        <strong>GET ?action=getDeploymentUrl</strong><br>
-        Returns the current deployment URL for API access
+        <strong>GET ?action=test</strong><br>
+        Test endpoint to verify API connectivity
       </div>
       
       <div class="endpoint">
@@ -453,7 +454,7 @@ function createWebAppInterface() {
     }
     
     function calculatePayments() {
-      if (confirm('This will create invoices and mark work as paid. Continue?')) {
+      if (confirm('This will create invoices, mark work as paid, and export PDF. Continue?')) {
         showLoading();
         google.script.run
           .withSuccessHandler(handleSuccess)
@@ -487,13 +488,6 @@ function createWebAppInterface() {
         .simpleTest();
     }
     
-    function getDeploymentUrl() {
-      showLoading();
-      google.script.run
-        .withSuccessHandler(handleSuccess)
-        .withFailureHandler(handleFailure)
-        .handleGetDeploymentUrl();
-    }
     
     function handleSuccess(result) {
       console.log('handleSuccess called with result:', result);
@@ -808,18 +802,6 @@ function handleDebugLogRequest() {
 }
 
 // Handle get deployment URL request
-function handleGetDeploymentUrl() {
-  const deploymentUrl = PropertiesService.getScriptProperties().getProperty('CURRENT_DEPLOYMENT_URL');
-  
-  return ContentService
-    .createTextOutput(JSON.stringify({
-      success: true,
-      url: deploymentUrl || null,
-      message: deploymentUrl ? 'Deployment URL found' : 'No deployment URL set. Run setCurrentDeploymentUrl() after deploying.',
-      timestamp: new Date().toISOString()
-    }))
-    .setMimeType(ContentService.MimeType.JSON);
-}
 
 // Test endpoint for basic connectivity
 function testEndpoint() {
@@ -1677,12 +1659,17 @@ function createInvoicesAndMark(workLogData, payments) {
       };
     }
     
-    createInvoice(payments);
+    const invoiceResult = createInvoice(payments);
     markWorkAsInvoiced(workLogData);
+    
+    // Export PDF of the created invoice
+    const pdfResult = exportLatestInvoicePDF();
     
     return {
       success: true,
-      message: 'Invoices created and work marked as invoiced'
+      message: 'Invoices created, work marked as invoiced, and PDF exported',
+      invoiceResult: invoiceResult,
+      pdfExport: pdfResult
     };
     
   } catch (error) {
@@ -1709,11 +1696,123 @@ function createInvoicesAndMarkUI() {
     PropertiesService.getScriptProperties().deleteProperty('pendingPayments');
     
     if (result.success) {
-      SpreadsheetApp.getUi().alert('Success', result.message, SpreadsheetApp.getUi().ButtonSet.OK);
+      let message = result.message;
+      
+      // Add PDF export status to message
+      if (result.pdfExport) {
+        if (result.pdfExport.success) {
+          message += `\n\nPDF exported successfully: ${result.pdfExport.filename}`;
+          message += `\nRows exported: ${result.pdfExport.rowsExported}`;
+        } else {
+          message += `\n\nPDF export failed: ${result.pdfExport.error}`;
+        }
+      }
+      
+      SpreadsheetApp.getUi().alert('Success', message, SpreadsheetApp.getUi().ButtonSet.OK);
     } else {
       SpreadsheetApp.getUi().alert('Error', result.error, SpreadsheetApp.getUi().ButtonSet.OK);
     }
     
+  } catch (error) {
+    SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
+    Logger.log(error);
+  }
+}
+
+/**
+ * Export latest invoice PDF - UI version
+ */
+function exportLatestInvoiceUI() {
+  try {
+    const result = exportLatestInvoicePDF();
+    
+    if (result.success) {
+      let message = `PDF exported successfully: ${result.filename}\n`;
+      message += `Rows exported: ${result.rowsExported}`;
+      
+      if (result.downloadUrl) {
+        message += '\n\nNote: PDF generated as data URL. Use web interface for download.';
+      }
+      
+      SpreadsheetApp.getUi().alert('Success', message, SpreadsheetApp.getUi().ButtonSet.OK);
+    } else {
+      SpreadsheetApp.getUi().alert('Error', result.error, SpreadsheetApp.getUi().ButtonSet.OK);
+    }
+  } catch (error) {
+    SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
+    Logger.log(error);
+  }
+}
+
+/**
+ * Export invoice by number - UI version
+ */
+function exportInvoiceByNumberUI() {
+  try {
+    const ui = SpreadsheetApp.getUi();
+    const response = ui.prompt('Export Invoice by Number', 'Enter the invoice number:', ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK) {
+      const invoiceNumber = response.getResponseText().trim();
+      
+      if (!invoiceNumber) {
+        ui.alert('Error', 'Please enter a valid invoice number', ui.ButtonSet.OK);
+        return;
+      }
+      
+      const result = exportInvoicesPDF(invoiceNumber);
+      
+      if (result.success) {
+        let message = `PDF exported successfully: ${result.filename}\n`;
+        message += `Rows exported: ${result.rowsExported}`;
+        
+        if (result.downloadUrl) {
+          message += '\n\nNote: PDF generated as data URL. Use web interface for download.';
+        }
+        
+        ui.alert('Success', message, ui.ButtonSet.OK);
+      } else {
+        ui.alert('Error', result.error, ui.ButtonSet.OK);
+      }
+    }
+  } catch (error) {
+    SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
+    Logger.log(error);
+  }
+}
+
+/**
+ * Export recent invoices - UI version
+ */
+function exportRecentInvoicesUI() {
+  try {
+    const ui = SpreadsheetApp.getUi();
+    const response = ui.prompt('Export Recent Invoices', 'Enter number of days back (default: 30):', ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK) {
+      const daysBackText = response.getResponseText().trim();
+      const daysBack = daysBackText ? parseInt(daysBackText) : 30;
+      
+      if (isNaN(daysBack) || daysBack <= 0) {
+        ui.alert('Error', 'Please enter a valid number of days', ui.ButtonSet.OK);
+        return;
+      }
+      
+      const result = exportInvoicesPDF(null, daysBack);
+      
+      if (result.success) {
+        let message = `PDF exported successfully: ${result.filename}\n`;
+        message += `Rows exported: ${result.rowsExported}`;
+        
+        if (result.downloadUrl) {
+          message += '\n\nNote: PDF generated as data URL. Use web interface for download.';
+        }
+        
+        ui.alert('Success', message, ui.ButtonSet.OK);
+      } else {
+        ui.alert('Error', result.error, ui.ButtonSet.OK);
+      }
+    }
   } catch (error) {
     SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
     Logger.log(error);
@@ -1769,11 +1868,8 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30, specificDate = n
     }
     
     // Filter rows based on criteria
-    let filteredRows = [];
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysBack);
-    
-    // Filter rows based on criteria
     let filteredAllDataRows = [];
     if (invoiceNumber) {
       if (specificDate) {
