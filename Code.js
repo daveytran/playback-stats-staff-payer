@@ -91,10 +91,22 @@ function doGet(e) {
       case 'getDeploymentUrl':
         result = handleGetDeploymentUrl();
         break;
+      case 'exportLatestInvoice':
+        result = ContentService
+          .createTextOutput(JSON.stringify(exportLatestInvoicePDF()))
+          .setMimeType(ContentService.MimeType.JSON);
+        break;
+      case 'exportInvoicePDF':
+        const invoiceNum = e.parameter.invoiceNumber;
+        const days = e.parameter.daysBack ? parseInt(e.parameter.daysBack) : 30;
+        result = ContentService
+          .createTextOutput(JSON.stringify(exportInvoicesPDF(invoiceNum, days)))
+          .setMimeType(ContentService.MimeType.JSON);
+        break;
       default:
         result = ContentService
           .createTextOutput(JSON.stringify({
-            error: 'Invalid action. Use: preview, calculatePay, getStatus, getDebugLog, or getDeploymentUrl'
+            error: 'Invalid action. Available actions: preview, calculatePay, getStatus, getDebugLog, getDeploymentUrl, exportLatestInvoice, exportInvoicePDF'
           }))
           .setMimeType(ContentService.MimeType.JSON);
     }
@@ -150,7 +162,7 @@ function createWebAppInterface() {
     }
     .action-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       gap: 20px;
       margin-bottom: 30px;
     }
@@ -261,6 +273,17 @@ function createWebAppInterface() {
       border-radius: 3px;
       font-family: 'Courier New', monospace;
     }
+    input[type="text"], input[type="number"] {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    input[type="text"]:focus, input[type="number"]:focus {
+      outline: none;
+      border-color: #3498db;
+      box-shadow: 0 0 5px rgba(52, 152, 219, 0.3);
+    }
   </style>
 </head>
 <body>
@@ -290,6 +313,32 @@ function createWebAppInterface() {
         <h3>Debug Information</h3>
         <p>View debug logs for troubleshooting</p>
         <button class="btn btn-info" onclick="getDebugLog()">Debug</button>
+      </div>
+      
+      <div class="action-card">
+        <h3>Deployment URL</h3>
+        <p>Get current deployment URL for API access</p>
+        <button class="btn btn-info" onclick="getDeploymentUrl()">Get URL</button>
+      </div>
+      
+      <div class="action-card">
+        <h3>Export Latest Invoice</h3>
+        <p>Export the most recently created invoice as PDF</p>
+        <button class="btn btn-warning" onclick="exportLatestInvoice()">Export PDF</button>
+      </div>
+      
+      <div class="action-card">
+        <h3>Export Invoice by Number</h3>
+        <p>Export specific invoice by invoice number</p>
+        <input type="text" id="invoiceNumber" placeholder="Invoice Number" style="width: 100%; margin-bottom: 10px; padding: 8px;">
+        <button class="btn btn-warning" onclick="exportInvoiceByNumber()">Export PDF</button>
+      </div>
+      
+      <div class="action-card">
+        <h3>Export Recent Invoices</h3>
+        <p>Export invoices from the last N days</p>
+        <input type="number" id="daysBack" placeholder="Days back (default: 30)" value="30" style="width: 100%; margin-bottom: 10px; padding: 8px;">
+        <button class="btn btn-warning" onclick="exportRecentInvoices()">Export PDF</button>
       </div>
     </div>
     
@@ -322,6 +371,26 @@ function createWebAppInterface() {
       <div class="endpoint">
         <strong>GET ?action=getDebugLog</strong><br>
         Returns debug information
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET ?action=getDeploymentUrl</strong><br>
+        Returns the current deployment URL for API access
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET ?action=exportLatestInvoice</strong><br>
+        Exports the most recently created invoice as PDF
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET ?action=exportInvoicePDF&invoiceNumber=[number]</strong><br>
+        Exports specific invoice by invoice number as PDF
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET ?action=exportInvoicePDF&daysBack=[number]</strong><br>
+        Exports invoices from the last N days as PDF (default: 30 days)
       </div>
       
       <h4>Direct Function Calls (Google Apps Script)</h4>
@@ -387,6 +456,28 @@ function createWebAppInterface() {
     
     function getDebugLog() {
       makeRequest('getDebugLog');
+    }
+    
+    function getDeploymentUrl() {
+      makeRequest('getDeploymentUrl');
+    }
+    
+    function exportLatestInvoice() {
+      makeRequest('exportLatestInvoice');
+    }
+    
+    function exportInvoiceByNumber() {
+      const invoiceNumber = document.getElementById('invoiceNumber').value.trim();
+      if (!invoiceNumber) {
+        showResults('<strong>Error:</strong> Please enter an invoice number', true);
+        return;
+      }
+      makeRequest('exportInvoicePDF&invoiceNumber=' + encodeURIComponent(invoiceNumber));
+    }
+    
+    function exportRecentInvoices() {
+      const daysBack = document.getElementById('daysBack').value || 30;
+      makeRequest('exportInvoicePDF&daysBack=' + encodeURIComponent(daysBack));
     }
   </script>
 </body>
@@ -1435,5 +1526,189 @@ function createInvoicesAndMarkUI() {
   } catch (error) {
     SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
     Logger.log(error);
+  }
+}
+
+/**
+ * Export specific invoice rows as PDF
+ * @param {string} invoiceNumber - Optional specific invoice number to export
+ * @param {number} daysBack - Number of days back to include invoices (default: 30)
+ * @returns {Object} Success status and PDF file URL
+ */
+function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
+  try {
+    const mainSheet = SpreadsheetApp.getActiveSpreadsheet();
+    const invoicingSheet = mainSheet.getSheetByName('Invoicing');
+    
+    if (!invoicingSheet) {
+      throw new Error('Invoicing sheet not found');
+    }
+    
+    const headerRow = 2;
+    const lastRow = invoicingSheet.getLastRow();
+    
+    if (lastRow <= headerRow) {
+      return {
+        success: false,
+        error: 'No invoice data found'
+      };
+    }
+    
+    // Get all data including headers
+    const allData = invoicingSheet.getRange(headerRow, 1, lastRow - headerRow + 1, invoicingSheet.getLastColumn()).getValues();
+    const headers = allData[0];
+    const dataRows = allData.slice(1);
+    
+    // Find column indices
+    const invoiceNumberCol = headers.indexOf('Invoice Number');
+    const dateCol = headers.indexOf('Date');
+    
+    if (invoiceNumberCol === -1) {
+      throw new Error('Invoice Number column not found');
+    }
+    
+    // Filter rows based on criteria
+    let filteredRows = [];
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysBack);
+    
+    if (invoiceNumber) {
+      // Export specific invoice number
+      filteredRows = dataRows.filter(row => row[invoiceNumberCol] === invoiceNumber);
+    } else {
+      // Export recent invoices
+      filteredRows = dataRows.filter(row => {
+        const rowDate = new Date(row[dateCol]);
+        return rowDate >= cutoffDate;
+      });
+    }
+    
+    if (filteredRows.length === 0) {
+      return {
+        success: false,
+        error: invoiceNumber ? 
+          `No invoices found with number: ${invoiceNumber}` : 
+          `No invoices found in the last ${daysBack} days`
+      };
+    }
+    
+    // Create a temporary sheet with filtered data
+    const tempSheetName = `TempInvoices_${Date.now()}`;
+    const tempSheet = mainSheet.insertSheet(tempSheetName);
+    
+    // Copy headers
+    tempSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    
+    // Copy filtered data
+    if (filteredRows.length > 0) {
+      tempSheet.getRange(2, 1, filteredRows.length, headers.length).setValues(filteredRows);
+    }
+    
+    // Format the temporary sheet
+    formatInvoiceSheet(tempSheet, headers.length, filteredRows.length + 1);
+    
+    // Convert to PDF
+    const pdfBlob = tempSheet.getParent().getAs('application/pdf');
+    
+    // Create filename
+    const dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd');
+    const filename = invoiceNumber ? 
+      `Invoice_${invoiceNumber}_${dateStr}.pdf` : 
+      `Invoices_Recent_${dateStr}.pdf`;
+    
+    // Save PDF to Drive
+    const pdfFile = DriveApp.createFile(pdfBlob);
+    pdfFile.setName(filename);
+    
+    // Clean up temporary sheet
+    mainSheet.deleteSheet(tempSheet);
+    
+    return {
+      success: true,
+      message: `PDF created successfully: ${filename}`,
+      fileId: pdfFile.getId(),
+      downloadUrl: pdfFile.getDownloadUrl(),
+      filename: filename,
+      rowsExported: filteredRows.length
+    };
+    
+  } catch (error) {
+    Logger.log('Error in exportInvoicesPDF: ' + error.toString());
+    return {
+      success: false,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Format the invoice sheet for PDF export
+ */
+function formatInvoiceSheet(sheet, numCols, numRows) {
+  // Set header formatting
+  const headerRange = sheet.getRange(1, 1, 1, numCols);
+  headerRange.setFontWeight('bold');
+  headerRange.setBackground('#4A90E2');
+  headerRange.setFontColor('white');
+  
+  // Set borders for all data
+  const dataRange = sheet.getRange(1, 1, numRows, numCols);
+  dataRange.setBorder(true, true, true, true, true, true);
+  
+  // Auto-resize columns
+  for (let i = 1; i <= numCols; i++) {
+    sheet.autoResizeColumn(i);
+  }
+  
+  // Set alternating row colors
+  for (let i = 2; i <= numRows; i++) {
+    if (i % 2 === 0) {
+      sheet.getRange(i, 1, 1, numCols).setBackground('#f9f9f9');
+    }
+  }
+}
+
+/**
+ * Export the most recently created invoice as PDF
+ * (Use this after creating invoices)
+ */
+function exportLatestInvoicePDF() {
+  try {
+    const mainSheet = SpreadsheetApp.getActiveSpreadsheet();
+    const invoicingSheet = mainSheet.getSheetByName('Invoicing');
+    
+    if (!invoicingSheet) {
+      throw new Error('Invoicing sheet not found');
+    }
+    
+    const headerRow = 2;
+    const lastRow = invoicingSheet.getLastRow();
+    
+    if (lastRow <= headerRow) {
+      return {
+        success: false,
+        error: 'No invoice data found'
+      };
+    }
+    
+    // Get the most recent invoice number
+    const headers = invoicingSheet.getRange(headerRow, 1, 1, invoicingSheet.getLastColumn()).getValues()[0];
+    const invoiceNumberCol = headers.indexOf('Invoice Number');
+    
+    if (invoiceNumberCol === -1) {
+      throw new Error('Invoice Number column not found');
+    }
+    
+    const latestInvoiceNumber = invoicingSheet.getRange(lastRow, invoiceNumberCol + 1).getValue();
+    
+    // Export that specific invoice
+    return exportInvoicesPDF(latestInvoiceNumber);
+    
+  } catch (error) {
+    Logger.log('Error in exportLatestInvoicePDF: ' + error.toString());
+    return {
+      success: false,
+      error: error.toString()
+    };
   }
 }
