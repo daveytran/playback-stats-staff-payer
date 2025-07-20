@@ -445,10 +445,11 @@ function createWebAppInterface() {
     
     function previewPayments() {
       showLoading();
+      console.log('Calling handleCalculatePayPreviewRequest with directReturn=true');
       google.script.run
         .withSuccessHandler(handleSuccess)
         .withFailureHandler(handleFailure)
-        .handleCalculatePayPreviewRequest();
+        .handleCalculatePayPreviewRequest(true);
     }
     
     function calculatePayments() {
@@ -479,10 +480,11 @@ function createWebAppInterface() {
     
     function testConnection() {
       showLoading();
+      console.log('Calling simpleTest function');
       google.script.run
         .withSuccessHandler(handleSuccess)
         .withFailureHandler(handleFailure)
-        .testEndpoint();
+        .simpleTest();
     }
     
     function getDeploymentUrl() {
@@ -494,15 +496,38 @@ function createWebAppInterface() {
     }
     
     function handleSuccess(result) {
-      // Result should now be an object directly from the server function
+      console.log('handleSuccess called with result:', result);
+      console.log('Result type:', typeof result);
+      console.log('Result keys:', Object.keys(result || {}));
+      
+      // Check if result is null or undefined
+      if (!result) {
+        console.error('Result is null/undefined');
+        showResults('<strong>Error:</strong> Server function returned null. Check server-side logs.', true);
+        return;
+      }
+      
+      // Result should now be a direct object when using directReturn=true
       if (result.error) {
+        console.log('Error found:', result.error);
         showResults('<strong>Error:</strong> ' + result.error, true);
       } else {
-        showResults('<pre>' + JSON.stringify(result, null, 2) + '</pre>');
+        console.log('Attempting to JSON.stringify result...');
+        try {
+          const jsonString = JSON.stringify(result, null, 2);
+          console.log('JSON stringify successful, length:', jsonString.length);
+          showResults('<pre>' + jsonString + '</pre>');
+        } catch (e) {
+          console.error('JSON.stringify failed:', e);
+          showResults('<strong>JSON Error:</strong> Could not serialize result - ' + e.message, true);
+        }
       }
     }
     
     function handleFailure(error) {
+      console.error('handleFailure called with error:', error);
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
       showResults('<strong>Request failed:</strong> ' + error.message, true);
     }
     
@@ -605,24 +630,32 @@ function doPost(e) {
 }
 
 // Handle calculate pay preview request from web (no execution)
-function handleCalculatePayPreviewRequest() {
+function handleCalculatePayPreviewRequest(directReturn = false) {
   try {
     const workLogData = getUnpaidWorkFromMaster();
     
     if (workLogData.length === 0) {
-      return {
+      const result = {
         success: false,
         message: 'No unpaid work found',
         debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
       };
+      
+      if (directReturn) {
+        return result;
+      } else {
+        return ContentService
+          .createTextOutput(JSON.stringify(result))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
     }
     
     const payConfig = getPayConfiguration();
     const staffMapping = getStaffMapping();
     const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
     
-    // Return preview data without executing
-    return {
+    // Create a clean, serializable result object
+    const result = {
       success: true,
       message: 'Payment preview calculated successfully',
       summary: {
@@ -630,19 +663,60 @@ function handleCalculatePayPreviewRequest() {
         totalStaff: Object.keys(payments).length,
         grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
         errors: {
-          unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
-          unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
-          tasksWithNoRate: errors.tasksWithNoRate
+          unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes || []),
+          unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys || []),
+          tasksWithNoRate: Array.from(errors.tasksWithNoRate || [])
         }
       },
-      payments: payments // Include full payment details for review
+      // Create a clean payments object that's guaranteed to serialize
+      payments: {}
     };
+    
+    // Manually construct payments object to avoid serialization issues
+    Object.keys(payments).forEach(staffName => {
+      const payment = payments[staffName];
+      result.payments[staffName] = {
+        staffKey: String(payment.staffKey || ''),
+        legalName: String(payment.legalName || ''),
+        hasMapping: Boolean(payment.hasMapping),
+        totalAmount: Number(payment.totalAmount || 0),
+        taskCount: Array.isArray(payment.tasks) ? payment.tasks.length : 0,
+        tasks: Array.isArray(payment.tasks) ? payment.tasks.map(task => ({
+          rowIndex: Number(task.rowIndex || 0),
+          staffName: String(task.staffName || ''),
+          taskType: String(task.taskType || ''),
+          league: String(task.league || ''),
+          round: String(task.round || ''),
+          team1: String(task.team1 || ''),
+          team2: String(task.team2 || ''),
+          rate: Number(task.rate || 0),
+          rateSource: String(task.rateSource || ''),
+          hasValidRate: Boolean(task.hasValidRate)
+        })) : []
+      };
+    });
+    
+    if (directReturn) {
+      return result;
+    } else {
+      return ContentService
+        .createTextOutput(JSON.stringify(result))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
       
   } catch (error) {
-    return {
+    const errorResult = {
       success: false,
       error: error.toString()
     };
+    
+    if (directReturn) {
+      return errorResult;
+    } else {
+      return ContentService
+        .createTextOutput(JSON.stringify(errorResult))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
   }
 }
 
@@ -652,11 +726,13 @@ function handleCalculatePayRequest() {
     const workLogData = getUnpaidWorkFromMaster();
     
     if (workLogData.length === 0) {
-      return {
-        success: false,
-        message: 'No unpaid work found',
-        debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
-      };
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          success: false,
+          message: 'No unpaid work found',
+          debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
     }
     
     const payConfig = getPayConfiguration();
@@ -667,26 +743,30 @@ function handleCalculatePayRequest() {
     createInvoice(payments);
     markWorkAsInvoiced(workLogData);
     
-    return {
-      success: true,
-      message: 'Invoices created successfully',
-      summary: {
-        totalTasks: workLogData.length,
-        totalStaff: Object.keys(payments).length,
-        grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
-        errors: {
-          unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
-          unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
-          tasksWithNoRate: errors.tasksWithNoRate
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: true,
+        message: 'Invoices created successfully',
+        summary: {
+          totalTasks: workLogData.length,
+          totalStaff: Object.keys(payments).length,
+          grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
+          errors: {
+            unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
+            unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
+            tasksWithNoRate: errors.tasksWithNoRate
+          }
         }
-      }
-    };
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
       
   } catch (error) {
-    return {
-      success: false,
-      error: error.toString()
-    };
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: false,
+        error: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -695,19 +775,23 @@ function handleStatusRequest() {
   try {
     const workLogData = getUnpaidWorkFromMaster();
     
-    return {
-      success: true,
-      status: {
-        unpaidTasks: workLogData.length,
-        lastCheck: new Date().toISOString()
-      }
-    };
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: true,
+        status: {
+          unpaidTasks: workLogData.length,
+          lastCheck: new Date().toISOString()
+        }
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
       
   } catch (error) {
-    return {
-      success: false,
-      error: error.toString()
-    };
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: false,
+        error: error.toString()
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -715,31 +799,93 @@ function handleStatusRequest() {
 function handleDebugLogRequest() {
   const debugLog = JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]');
   
-  return {
-    success: true,
-    debugLog: debugLog
-  };
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      success: true,
+      debugLog: debugLog
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // Handle get deployment URL request
 function handleGetDeploymentUrl() {
   const deploymentUrl = PropertiesService.getScriptProperties().getProperty('CURRENT_DEPLOYMENT_URL');
   
-  return {
-    success: true,
-    url: deploymentUrl || null,
-    message: deploymentUrl ? 'Deployment URL found' : 'No deployment URL set. Run setCurrentDeploymentUrl() after deploying.',
-    timestamp: new Date().toISOString()
-  };
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      success: true,
+      url: deploymentUrl || null,
+      message: deploymentUrl ? 'Deployment URL found' : 'No deployment URL set. Run setCurrentDeploymentUrl() after deploying.',
+      timestamp: new Date().toISOString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // Test endpoint for basic connectivity
 function testEndpoint() {
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      success: true,
+      message: 'Test endpoint working - direct function call',
+      timestamp: new Date().toISOString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Simple test function for google.script.run
+function simpleTest() {
   return {
     success: true,
-    message: 'Test endpoint working - direct function call',
+    message: 'Simple test working',
     timestamp: new Date().toISOString()
   };
+}
+
+// Simplified preview function to test step by step
+function testPreview() {
+  try {
+    // Test 1: Basic function call
+    console.log('testPreview: Starting');
+    
+    // Test 2: Can we get work log data?
+    const workLogData = getUnpaidWorkFromMaster();
+    console.log('testPreview: Work log data length:', workLogData.length);
+    
+    if (workLogData.length === 0) {
+      return {
+        success: false,
+        message: 'No unpaid work found',
+        step: 'workLogData check'
+      };
+    }
+    
+    // Test 3: Can we get config data?
+    const payConfig = getPayConfiguration();
+    console.log('testPreview: Pay config keys:', Object.keys(payConfig));
+    
+    const staffMapping = getStaffMapping();
+    console.log('testPreview: Staff mapping keys:', Object.keys(staffMapping));
+    
+    // Test 4: Can we calculate payments?
+    const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
+    console.log('testPreview: Payments calculated, staff count:', Object.keys(payments).length);
+    
+    // Test 5: Return minimal result
+    return {
+      success: true,
+      message: 'Test preview completed',
+      taskCount: workLogData.length,
+      staffCount: Object.keys(payments).length
+    };
+    
+  } catch (error) {
+    console.error('testPreview error:', error);
+    return {
+      success: false,
+      error: error.toString(),
+      step: 'exception caught'
+    };
+  }
 }
 
 /**
@@ -1661,12 +1807,9 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
       `Invoice_${invoiceNumber}_${dateStr}.pdf` : 
       `Invoices_Recent_${dateStr}.pdf`;
     
-    // Save PDF to Drive
-    const pdfFile = DriveApp.createFile(pdfBlob);
-    pdfFile.setName(filename);
-    
-    // Set sharing permissions to allow access via URL
-    pdfFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    // Convert PDF to base64 data URL
+    const base64Data = Utilities.base64Encode(pdfBlob.getBytes());
+    const dataUrl = `data:application/pdf;base64,${base64Data}`;
     
     // Clean up temporary sheet
     mainSheet.deleteSheet(tempSheet);
@@ -1674,10 +1817,8 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     return {
       success: true,
       message: `PDF created successfully: ${filename}`,
-      fileId: pdfFile.getId(),
-      downloadUrl: `https://drive.google.com/uc?export=download&id=${pdfFile.getId()}`,
-      viewUrl: pdfFile.getUrl(),
       filename: filename,
+      downloadUrl: dataUrl,
       rowsExported: filteredRows.length
     };
     
