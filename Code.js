@@ -1807,6 +1807,15 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     // Wait a moment for formatting to apply
     Utilities.sleep(1000);
     
+    // Debug: log temp spreadsheet info
+    Logger.log(`Temp spreadsheet has ${tempSheet.getLastRow()} rows and ${tempSheet.getLastColumn()} columns`);
+    Logger.log(`Data range A1:${String.fromCharCode(64 + tempSheet.getLastColumn())}${tempSheet.getLastRow()}`);
+    
+    // Set print area to ensure all data is included
+    const lastCol = String.fromCharCode(64 + headers.length);
+    const printRange = `A1:${lastCol}${filteredRows.length + 1}`;
+    tempSheet.getRange(printRange).activate();
+    
     // Convert to PDF using built-in method
     const pdfBlob = tempSpreadsheet.getAs('application/pdf');
     
