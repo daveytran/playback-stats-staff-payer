@@ -1779,7 +1779,13 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
         success: false,
         error: invoiceNumber ? 
           `No invoices found with number: ${invoiceNumber}` : 
-          `No invoices found in the last ${daysBack} days`
+          `No invoices found in the last ${daysBack} days`,
+        debug: {
+          totalRows: dataRows.length,
+          invoiceNumberCol: invoiceNumberCol,
+          dateCol: dateCol,
+          searchCriteria: invoiceNumber || `last ${daysBack} days`
+        }
       };
     }
     
@@ -1819,7 +1825,12 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
       message: `PDF created successfully: ${filename}`,
       filename: filename,
       downloadUrl: dataUrl,
-      rowsExported: filteredRows.length
+      rowsExported: filteredRows.length,
+      debug: {
+        headersLength: headers.length,
+        filteredRowsLength: filteredRows.length,
+        tempSpreadsheetId: tempSpreadsheet.getId()
+      }
     };
     
   } catch (error) {
