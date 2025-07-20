@@ -39,12 +39,7 @@ function onOpen() {
   ui.createMenu('Staff Pay Automation')
     .addItem('Calculate Staff Pay', 'calculateStaffPayUI')
     .addSeparator()
-    .addItem('Create Invoices & Export PDF', 'createInvoicesAndMarkUI')
-    .addSeparator()
-    .addSubMenu(ui.createMenu('Export PDF')
-      .addItem('Export Latest Invoice', 'exportLatestInvoiceUI')
-      .addItem('Export Invoice by Number...', 'exportInvoiceByNumberUI')
-      .addItem('Export Recent Invoices...', 'exportRecentInvoicesUI'))
+    .addItem('Create Invoices', 'createInvoicesAndMarkUI')
     .addSeparator()
     .addItem('Analyze Sheet Structure', 'analyzeSheets')
     .addItem('Get Sample Data', 'getSampleData')
@@ -317,8 +312,8 @@ function createWebAppInterface() {
       </div>
       
       <div class="action-card">
-        <h3>Calculate, Create Invoices & Export PDF</h3>
-        <p>Calculate payments, create invoices in the spreadsheet, and export PDF</p>
+        <h3>Calculate & Create Invoices</h3>
+        <p>Calculate payments and create invoices in the spreadsheet</p>
         <button class="btn btn-success" onclick="calculatePayments()">Execute</button>
       </div>
       
@@ -380,7 +375,7 @@ function createWebAppInterface() {
       
       <div class="endpoint">
         <strong>GET ?action=calculatePay</strong><br>
-        Calculates payments, creates invoices, and exports PDF
+        Calculates payments and creates invoices
       </div>
       
       <div class="endpoint">
@@ -454,7 +449,7 @@ function createWebAppInterface() {
     }
     
     function calculatePayments() {
-      if (confirm('This will create invoices, mark work as paid, and export PDF. Continue?')) {
+      if (confirm('This will create invoices and mark work as paid. Continue?')) {
         showLoading();
         google.script.run
           .withSuccessHandler(handleSuccess)
@@ -1025,11 +1020,14 @@ function calculateStaffPayUI() {
       </div>
     `;
     
-    const htmlOutput = HtmlService.createHtmlOutput(htmlContent)
-        .setWidth(600)
-        .setHeight(500);
+    // Use simple alert instead of modal dialog
+    let alertMessage = 'Payment Summary:\n\n' + summary;
+    if (errorMessage) {
+      alertMessage += '\n\nErrors:\n' + errorMessage;
+    }
+    alertMessage += '\n\nUse "Create Invoices" from the menu to proceed.';
     
-    ui.showModalDialog(htmlOutput, 'Payment Summary & Actions');
+    ui.alert('Payment Summary', alertMessage, ui.ButtonSet.OK);
     
     // Store for UI callback
     PropertiesService.getScriptProperties().setProperty('pendingWorkData', JSON.stringify(result.workLogData));
@@ -1542,10 +1540,8 @@ function analyzeSheets() {
     
     // Show results in a dialog
     const html = '<pre>' + JSON.stringify(results, null, 2) + '</pre>';
-    const htmlOutput = HtmlService.createHtmlOutput(html)
-        .setWidth(600)
-        .setHeight(400);
-    SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Sheet Structure Analysis');
+    // Use simple alert instead of modal dialog
+    SpreadsheetApp.getUi().alert('Sheet Structure Analysis', `Found ${results.sheets.length} sheets. Check server logs for detailed analysis.`, SpreadsheetApp.getUi().ButtonSet.OK);
     
     return results;
   } catch (error) {
@@ -1599,10 +1595,8 @@ function getSampleData() {
     html += '<pre>' + JSON.stringify(samples, null, 2) + '</pre>';
     html += '</div>';
     
-    const htmlOutput = HtmlService.createHtmlOutput(html)
-        .setWidth(700)
-        .setHeight(500);
-    SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Sample Data from Sheets');
+    // Use simple alert instead of modal dialog
+    SpreadsheetApp.getUi().alert('Sample Data', 'Sample data collected from sheets. Check the server logs for detailed output.', SpreadsheetApp.getUi().ButtonSet.OK);
     
     return samples;
   } catch (error) {
@@ -1629,11 +1623,9 @@ ${debugInfo}
     </div>
   `;
   
-  const htmlOutput = HtmlService.createHtmlOutput(htmlContent)
-      .setWidth(700)
-      .setHeight(500);
-  
-  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Debug Log');
+  // Use simple alert instead of modal dialog
+  const logText = debugLog.length > 0 ? debugLog.join('\n') : 'No debug log entries found';
+  SpreadsheetApp.getUi().alert('Debug Log', logText, SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 /**
@@ -1662,14 +1654,10 @@ function createInvoicesAndMark(workLogData, payments) {
     const invoiceResult = createInvoice(payments);
     markWorkAsInvoiced(workLogData);
     
-    // Export PDF of the created invoice
-    const pdfResult = exportLatestInvoicePDF();
-    
     return {
       success: true,
-      message: 'Invoices created, work marked as invoiced, and PDF exported',
-      invoiceResult: invoiceResult,
-      pdfExport: pdfResult
+      message: 'Invoices created and work marked as invoiced',
+      invoiceResult: invoiceResult
     };
     
   } catch (error) {
@@ -1696,19 +1684,7 @@ function createInvoicesAndMarkUI() {
     PropertiesService.getScriptProperties().deleteProperty('pendingPayments');
     
     if (result.success) {
-      let message = result.message;
-      
-      // Add PDF export status to message
-      if (result.pdfExport) {
-        if (result.pdfExport.success) {
-          message += `\n\nPDF exported successfully: ${result.pdfExport.filename}`;
-          message += `\nRows exported: ${result.pdfExport.rowsExported}`;
-        } else {
-          message += `\n\nPDF export failed: ${result.pdfExport.error}`;
-        }
-      }
-      
-      SpreadsheetApp.getUi().alert('Success', message, SpreadsheetApp.getUi().ButtonSet.OK);
+      SpreadsheetApp.getUi().alert('Success', result.message, SpreadsheetApp.getUi().ButtonSet.OK);
     } else {
       SpreadsheetApp.getUi().alert('Error', result.error, SpreadsheetApp.getUi().ButtonSet.OK);
     }
@@ -1719,105 +1695,6 @@ function createInvoicesAndMarkUI() {
   }
 }
 
-/**
- * Export latest invoice PDF - UI version
- */
-function exportLatestInvoiceUI() {
-  try {
-    const result = exportLatestInvoicePDF();
-    
-    if (result.success) {
-      let message = `PDF exported successfully: ${result.filename}\n`;
-      message += `Rows exported: ${result.rowsExported}`;
-      
-      if (result.downloadUrl) {
-        message += '\n\nNote: PDF generated as data URL. Use web interface for download.';
-      }
-      
-      SpreadsheetApp.getUi().alert('Success', message, SpreadsheetApp.getUi().ButtonSet.OK);
-    } else {
-      SpreadsheetApp.getUi().alert('Error', result.error, SpreadsheetApp.getUi().ButtonSet.OK);
-    }
-  } catch (error) {
-    SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
-    Logger.log(error);
-  }
-}
-
-/**
- * Export invoice by number - UI version
- */
-function exportInvoiceByNumberUI() {
-  try {
-    const ui = SpreadsheetApp.getUi();
-    const response = ui.prompt('Export Invoice by Number', 'Enter the invoice number:', ui.ButtonSet.OK_CANCEL);
-    
-    if (response.getSelectedButton() === ui.Button.OK) {
-      const invoiceNumber = response.getResponseText().trim();
-      
-      if (!invoiceNumber) {
-        ui.alert('Error', 'Please enter a valid invoice number', ui.ButtonSet.OK);
-        return;
-      }
-      
-      const result = exportInvoicesPDF(invoiceNumber);
-      
-      if (result.success) {
-        let message = `PDF exported successfully: ${result.filename}\n`;
-        message += `Rows exported: ${result.rowsExported}`;
-        
-        if (result.downloadUrl) {
-          message += '\n\nNote: PDF generated as data URL. Use web interface for download.';
-        }
-        
-        ui.alert('Success', message, ui.ButtonSet.OK);
-      } else {
-        ui.alert('Error', result.error, ui.ButtonSet.OK);
-      }
-    }
-  } catch (error) {
-    SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
-    Logger.log(error);
-  }
-}
-
-/**
- * Export recent invoices - UI version
- */
-function exportRecentInvoicesUI() {
-  try {
-    const ui = SpreadsheetApp.getUi();
-    const response = ui.prompt('Export Recent Invoices', 'Enter number of days back (default: 30):', ui.ButtonSet.OK_CANCEL);
-    
-    if (response.getSelectedButton() === ui.Button.OK) {
-      const daysBackText = response.getResponseText().trim();
-      const daysBack = daysBackText ? parseInt(daysBackText) : 30;
-      
-      if (isNaN(daysBack) || daysBack <= 0) {
-        ui.alert('Error', 'Please enter a valid number of days', ui.ButtonSet.OK);
-        return;
-      }
-      
-      const result = exportInvoicesPDF(null, daysBack);
-      
-      if (result.success) {
-        let message = `PDF exported successfully: ${result.filename}\n`;
-        message += `Rows exported: ${result.rowsExported}`;
-        
-        if (result.downloadUrl) {
-          message += '\n\nNote: PDF generated as data URL. Use web interface for download.';
-        }
-        
-        ui.alert('Success', message, ui.ButtonSet.OK);
-      } else {
-        ui.alert('Error', result.error, ui.ButtonSet.OK);
-      }
-    }
-  } catch (error) {
-    SpreadsheetApp.getUi().alert('Error', 'An error occurred: ' + error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
-    Logger.log(error);
-  }
-}
 
 /**
  * Export specific invoice rows as PDF
