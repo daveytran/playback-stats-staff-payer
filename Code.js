@@ -66,14 +66,14 @@ function onOpen() {
  * - updateDeploymentAfterPush(deploymentId) - Helper to update URL with deployment ID
  */
 function doGet(e) {
-  const action = e.parameter.action;
-  
-  // If no action parameter, serve the web interface
-  if (!action) {
-    return createWebAppInterface();
-  }
-  
   try {
+    const action = e.parameter ? e.parameter.action : null;
+    
+    // If no action parameter, serve the web interface
+    if (!action) {
+      return createWebAppInterface();
+    }
+    
     let result;
     switch(action) {
       case 'preview':
@@ -90,6 +90,15 @@ function doGet(e) {
         break;
       case 'getDeploymentUrl':
         result = handleGetDeploymentUrl();
+        break;
+      case 'test':
+        result = ContentService
+          .createTextOutput(JSON.stringify({
+            success: true,
+            message: 'Test endpoint working',
+            timestamp: new Date().toISOString()
+          }))
+          .setMimeType(ContentService.MimeType.JSON);
         break;
       case 'exportLatestInvoice':
         result = ContentService
@@ -113,9 +122,14 @@ function doGet(e) {
     
     return result;
   } catch (error) {
+    // Log the error for debugging
+    console.error('Error in doGet:', error);
+    
     const errorResult = ContentService
       .createTextOutput(JSON.stringify({
-        error: error.toString()
+        success: false,
+        error: 'Server error: ' + error.toString(),
+        stack: error.stack || 'No stack trace available'
       }))
       .setMimeType(ContentService.MimeType.JSON);
     
@@ -316,6 +330,12 @@ function createWebAppInterface() {
       </div>
       
       <div class="action-card">
+        <h3>Test Connection</h3>
+        <p>Test basic API connectivity</p>
+        <button class="btn" onclick="testConnection()">Test</button>
+      </div>
+      
+      <div class="action-card">
         <h3>Deployment URL</h3>
         <p>Get current deployment URL for API access</p>
         <button class="btn btn-info" onclick="getDeploymentUrl()">Get URL</button>
@@ -423,47 +443,75 @@ function createWebAppInterface() {
       hideLoading();
     }
     
-    function makeRequest(action) {
-      showLoading();
-      
-      fetch(window.location.href + '?action=' + action)
-        .then(response => response.json())
-        .then(data => {
-          if (data.error) {
-            showResults('<strong>Error:</strong> ' + data.error, true);
-          } else {
-            showResults('<pre>' + JSON.stringify(data, null, 2) + '</pre>');
-          }
-        })
-        .catch(error => {
-          showResults('<strong>Request failed:</strong> ' + error.message, true);
-        });
-    }
-    
     function previewPayments() {
-      makeRequest('preview');
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .handleCalculatePayPreviewRequest();
     }
     
     function calculatePayments() {
       if (confirm('This will create invoices and mark work as paid. Continue?')) {
-        makeRequest('calculatePay');
+        showLoading();
+        google.script.run
+          .withSuccessHandler(handleSuccess)
+          .withFailureHandler(handleFailure)
+          .handleCalculatePayRequest();
       }
     }
     
     function checkStatus() {
-      makeRequest('getStatus');
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .handleStatusRequest();
     }
     
     function getDebugLog() {
-      makeRequest('getDebugLog');
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .handleDebugLogRequest();
+    }
+    
+    function testConnection() {
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .testEndpoint();
     }
     
     function getDeploymentUrl() {
-      makeRequest('getDeploymentUrl');
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .handleGetDeploymentUrl();
+    }
+    
+    function handleSuccess(result) {
+      // Result should now be an object directly from the server function
+      if (result.error) {
+        showResults('<strong>Error:</strong> ' + result.error, true);
+      } else {
+        showResults('<pre>' + JSON.stringify(result, null, 2) + '</pre>');
+      }
+    }
+    
+    function handleFailure(error) {
+      showResults('<strong>Request failed:</strong> ' + error.message, true);
     }
     
     function exportLatestInvoice() {
-      makeRequest('exportLatestInvoice');
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .exportLatestInvoicePDF();
     }
     
     function exportInvoiceByNumber() {
@@ -472,12 +520,20 @@ function createWebAppInterface() {
         showResults('<strong>Error:</strong> Please enter an invoice number', true);
         return;
       }
-      makeRequest('exportInvoicePDF&invoiceNumber=' + encodeURIComponent(invoiceNumber));
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .exportInvoicesPDF(invoiceNumber, null);
     }
     
     function exportRecentInvoices() {
-      const daysBack = document.getElementById('daysBack').value || 30;
-      makeRequest('exportInvoicePDF&daysBack=' + encodeURIComponent(daysBack));
+      const daysBack = parseInt(document.getElementById('daysBack').value) || 30;
+      showLoading();
+      google.script.run
+        .withSuccessHandler(handleSuccess)
+        .withFailureHandler(handleFailure)
+        .exportInvoicesPDF(null, daysBack);
     }
   </script>
 </body>
@@ -554,13 +610,11 @@ function handleCalculatePayPreviewRequest() {
     const workLogData = getUnpaidWorkFromMaster();
     
     if (workLogData.length === 0) {
-      return ContentService
-        .createTextOutput(JSON.stringify({
-          success: false,
-          message: 'No unpaid work found',
-          debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
-        }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return {
+        success: false,
+        message: 'No unpaid work found',
+        debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
+      };
     }
     
     const payConfig = getPayConfiguration();
@@ -568,31 +622,27 @@ function handleCalculatePayPreviewRequest() {
     const { payments, errors } = calculatePayments(workLogData, payConfig, staffMapping);
     
     // Return preview data without executing
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        success: true,
-        message: 'Payment preview calculated successfully',
-        summary: {
-          totalTasks: workLogData.length,
-          totalStaff: Object.keys(payments).length,
-          grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
-          errors: {
-            unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
-            unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
-            tasksWithNoRate: errors.tasksWithNoRate
-          }
-        },
-        payments: payments // Include full payment details for review
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return {
+      success: true,
+      message: 'Payment preview calculated successfully',
+      summary: {
+        totalTasks: workLogData.length,
+        totalStaff: Object.keys(payments).length,
+        grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
+        errors: {
+          unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
+          unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
+          tasksWithNoRate: errors.tasksWithNoRate
+        }
+      },
+      payments: payments // Include full payment details for review
+    };
       
   } catch (error) {
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        success: false,
-        error: error.toString()
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return {
+      success: false,
+      error: error.toString()
+    };
   }
 }
 
@@ -602,13 +652,11 @@ function handleCalculatePayRequest() {
     const workLogData = getUnpaidWorkFromMaster();
     
     if (workLogData.length === 0) {
-      return ContentService
-        .createTextOutput(JSON.stringify({
-          success: false,
-          message: 'No unpaid work found',
-          debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
-        }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return {
+        success: false,
+        message: 'No unpaid work found',
+        debugLog: JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]')
+      };
     }
     
     const payConfig = getPayConfiguration();
@@ -619,30 +667,26 @@ function handleCalculatePayRequest() {
     createInvoice(payments);
     markWorkAsInvoiced(workLogData);
     
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        success: true,
-        message: 'Invoices created successfully',
-        summary: {
-          totalTasks: workLogData.length,
-          totalStaff: Object.keys(payments).length,
-          grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
-          errors: {
-            unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
-            unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
-            tasksWithNoRate: errors.tasksWithNoRate
-          }
+    return {
+      success: true,
+      message: 'Invoices created successfully',
+      summary: {
+        totalTasks: workLogData.length,
+        totalStaff: Object.keys(payments).length,
+        grandTotal: Object.values(payments).reduce((sum, p) => sum + p.totalAmount, 0),
+        errors: {
+          unmatchedTaskTypes: Array.from(errors.unmatchedTaskTypes),
+          unmatchedStaffKeys: Array.from(errors.unmatchedStaffKeys),
+          tasksWithNoRate: errors.tasksWithNoRate
         }
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
+      }
+    };
       
   } catch (error) {
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        success: false,
-        error: error.toString()
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return {
+      success: false,
+      error: error.toString()
+    };
   }
 }
 
@@ -651,23 +695,19 @@ function handleStatusRequest() {
   try {
     const workLogData = getUnpaidWorkFromMaster();
     
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        success: true,
-        status: {
-          unpaidTasks: workLogData.length,
-          lastCheck: new Date().toISOString()
-        }
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return {
+      success: true,
+      status: {
+        unpaidTasks: workLogData.length,
+        lastCheck: new Date().toISOString()
+      }
+    };
       
   } catch (error) {
-    return ContentService
-      .createTextOutput(JSON.stringify({
-        success: false,
-        error: error.toString()
-      }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return {
+      success: false,
+      error: error.toString()
+    };
   }
 }
 
@@ -675,26 +715,31 @@ function handleStatusRequest() {
 function handleDebugLogRequest() {
   const debugLog = JSON.parse(PropertiesService.getScriptProperties().getProperty('lastDebugLog') || '[]');
   
-  return ContentService
-    .createTextOutput(JSON.stringify({
-      success: true,
-      debugLog: debugLog
-    }))
-    .setMimeType(ContentService.MimeType.JSON);
+  return {
+    success: true,
+    debugLog: debugLog
+  };
 }
 
 // Handle get deployment URL request
 function handleGetDeploymentUrl() {
   const deploymentUrl = PropertiesService.getScriptProperties().getProperty('CURRENT_DEPLOYMENT_URL');
   
-  return ContentService
-    .createTextOutput(JSON.stringify({
-      success: true,
-      url: deploymentUrl || null,
-      message: deploymentUrl ? 'Deployment URL found' : 'No deployment URL set. Run setCurrentDeploymentUrl() after deploying.',
-      timestamp: new Date().toISOString()
-    }))
-    .setMimeType(ContentService.MimeType.JSON);
+  return {
+    success: true,
+    url: deploymentUrl || null,
+    message: deploymentUrl ? 'Deployment URL found' : 'No deployment URL set. Run setCurrentDeploymentUrl() after deploying.',
+    timestamp: new Date().toISOString()
+  };
+}
+
+// Test endpoint for basic connectivity
+function testEndpoint() {
+  return {
+    success: true,
+    message: 'Test endpoint working - direct function call',
+    timestamp: new Date().toISOString()
+  };
 }
 
 /**
@@ -1620,6 +1665,9 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
     const pdfFile = DriveApp.createFile(pdfBlob);
     pdfFile.setName(filename);
     
+    // Set sharing permissions to allow access via URL
+    pdfFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    
     // Clean up temporary sheet
     mainSheet.deleteSheet(tempSheet);
     
@@ -1627,7 +1675,8 @@ function exportInvoicesPDF(invoiceNumber = null, daysBack = 30) {
       success: true,
       message: `PDF created successfully: ${filename}`,
       fileId: pdfFile.getId(),
-      downloadUrl: pdfFile.getDownloadUrl(),
+      downloadUrl: `https://drive.google.com/uc?export=download&id=${pdfFile.getId()}`,
+      viewUrl: pdfFile.getUrl(),
       filename: filename,
       rowsExported: filteredRows.length
     };
